@@ -19,7 +19,7 @@ python -m http.server --bind 127.0.0.1 --directory site 8000
 2. 入力スイッチのビット 2 と 3 をオンにして「1 tick 進める」を押す。入力 `0110` に対する出力は `01`。
 3. ビット 1 だけをオンにして、もう一度「1 tick 進める」を押す。入力 `1000` に対して出力は `01` のまま。
 
-同じ例は CLI の `circuitgame2 run --input 0110 --input 1000 examples/selected-latch.ncg2` で実行できる。
+同じ例は CLI の `ncg2 run --input 0110 --input 1000 examples/selected-latch.ncg2` で実行できる。
 
 自分の回路を試すには、ソース欄に `::main` を含む単独の NCG2 ソースを入力して「回路を読み込む」を押す。この画面では入力・出力をそれぞれ 256 ビットまで表示できる。ポートの宣言順と各ポートの最下位ビットからの順序に従い、入力スイッチには 1 からの通し番号を付ける。
 
