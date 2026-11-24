@@ -1,12 +1,18 @@
 //! ブラウザーとの入出力を変換し、Core の順序回路 VM を実行する。
 
+mod config;
+
+use std::ops::Range;
+
 use circuitgame2_core::{
     project::{
         CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits, ModuleBodyPosition, NameKey,
-        SourceSnapshot, analyze_definitions, check_use_aliases, parse_circuit_project,
+        SourceSnapshot, VramOutputError, analyze_definitions, check_use_aliases,
+        parse_circuit_project,
     },
     syntax::circuit::{CircuitFormError, Head},
 };
+pub use config::{ProjectSettings, decode_utf8};
 use wasm_bindgen::prelude::*;
 
 // CLI の例題と同じ範囲で回路を実行する。
@@ -37,41 +43,7 @@ impl Simulation {
             revision: 1,
             text: source,
         }];
-        let project = parse_circuit_project(&snapshots).map_err(source_error)?;
-        let analysis = analyze_definitions(&project)
-            .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
-        let key = NameKey {
-            parent: None,
-            name: "main",
-        };
-        let (_, declaration) = analysis
-            .aliases
-            .targets
-            .exports()
-            .declarations()
-            .declaration(key)
-            .ok_or("::main の宣言がない。")?;
-        if declaration.head != Head::Module {
-            return Err("::main には module を指定する。".into());
-        }
-        let entry = project
-            .circuits()
-            .first()
-            .and_then(|parsed| {
-                parsed
-                    .syntax
-                    .entries
-                    .iter()
-                    .position(|entry| entry.form == declaration.form)
-            })
-            .ok_or("::main の構文上の位置を取得できない。")?;
-        let aliases = check_use_aliases(&analysis.aliases.targets)
-            .map_err(|error| format!("別名を解決できない ({error:?})。"))?;
-        let compiled = aliases
-            .lower_clocked_vm(ModuleBodyPosition { file: 0, entry }, LIMITS)
-            .map_err(|error| format!("::main を展開できない。 {error:?}"))?
-            .ok_or("::main を実行できない。")?;
-        Ok(Self { compiled })
+        Self::from_snapshots(&snapshots, "::main", None, &[])
     }
 
     /// tick ごとに渡す入力のビット数を返す。
@@ -114,22 +86,123 @@ impl Simulation {
     }
 }
 
+impl Simulation {
+    /// 解析済みの宣言が指すファイルとフォームを使って VM を構築する。
+    fn from_snapshots(
+        snapshots: &[SourceSnapshot<'_>],
+        name: &str,
+        name_span: Option<Range<usize>>,
+        vram: &[config::Vram],
+    ) -> Result<Self, String> {
+        let project = parse_circuit_project(snapshots).map_err(source_error)?;
+        let analysis = analyze_definitions(&project)
+            .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
+        let at_entry = |message: String| match &name_span {
+            Some(span) => config::at(Some(span.clone()), &message),
+            None => message,
+        };
+        let qualified = name
+            .strip_prefix("::")
+            .filter(|path| {
+                path.split("::")
+                    .all(|part| !part.is_empty() && !part.contains(':'))
+            })
+            .ok_or_else(|| at_entry("開始モジュールを完全修飾名で指定する。".into()))?;
+        let (parent, unqualified) = qualified
+            .rsplit_once("::")
+            .map_or((None, qualified), |(parent, tail)| (Some(parent), tail));
+        let key = NameKey {
+            parent,
+            name: unqualified,
+        };
+        let (declaration_source, declaration) = analysis
+            .aliases
+            .targets
+            .exports()
+            .declarations()
+            .declaration(key)
+            .ok_or_else(|| at_entry(format!("{name} の宣言がない。")))?;
+        if declaration.head != Head::Module {
+            return Err(at_entry(format!("{name} は module を指す必要がある。")));
+        }
+        let file = project
+            .sources()
+            .iter()
+            .position(|source| source.id.same_file(&declaration_source.id))
+            .ok_or_else(|| at_entry(format!("{name} の宣言元ファイルが見つからない。")))?;
+        let entry = project
+            .circuits()
+            .get(file)
+            .and_then(|parsed| {
+                parsed
+                    .syntax
+                    .entries
+                    .iter()
+                    .position(|entry| entry.form == declaration.form)
+            })
+            .ok_or_else(|| at_entry(format!("{name} の宣言位置が見つからない。")))?;
+        let position = ModuleBodyPosition { file, entry };
+        let aliases = check_use_aliases(&analysis.aliases.targets)
+            .map_err(|error| format!("別名を解決できない ({error:?})。"))?;
+        let compiled = aliases
+            .lower_clocked_vm(position, LIMITS)
+            .map_err(|error| format!("{name} を展開できない ({error:?})。"))?
+            .ok_or_else(|| at_entry(format!("{name} を実行できない。")))?;
+        for item in vram {
+            let read = &item.read_output;
+            let target = aliases
+                .resolve_vram_output(position, LIMITS.width, read.get_ref())
+                .map_err(|error| config::at(Some(read.span()), &vram_error(error)))?;
+            if target.is_none() {
+                return Err(config::at(
+                    Some(read.span()),
+                    "VRAM に対応する開始モジュールがない。",
+                ));
+            }
+        }
+        Ok(Self { compiled })
+    }
+}
+
+/// 設定側の主範囲に加え、読み出し信号が指した定義の範囲を示す。
+fn vram_error(error: VramOutputError<'_, '_>) -> String {
+    match error {
+        VramOutputError::MissingDefinition => {
+            "read-output が指定する信号の定義が見つからない。".into()
+        }
+        VramOutputError::NotDirectMemory(site) => format!(
+            "read-output にはルート本体で RAM を直接呼んだ定義の出力名を指定する。\n回路側の定義 {} [{}..{}]",
+            site.source.id.components().join("/"),
+            site.span.start,
+            site.span.end
+        ),
+        VramOutputError::Module(_) => "VRAM の対象モジュールを検査できない。".into(),
+    }
+}
+
 /// 構文エラーの位置は元ソースの UTF-8 半開バイト範囲で示す。
 fn source_error(error: CircuitProjectError<'_>) -> String {
     match error {
         CircuitProjectError::Syntax {
+            id,
             error: CircuitFormError::Syntax(error),
             ..
         } => format!(
-            "main.ncg2 [{}..{}] 構文エラー ({:?})。",
-            error.span.start, error.span.end, error.kind
+            "{} [{}..{}] 構文エラー ({:?})。",
+            id.components().join("/"),
+            error.span.start,
+            error.span.end,
+            error.kind
         ),
         CircuitProjectError::Syntax {
+            id,
             error: CircuitFormError::Header { kind, span },
             ..
         } => format!(
-            "main.ncg2 [{}..{}] 回路フォームの構文エラー ({kind:?})。",
-            span.start, span.end
+            "{} [{}..{}] 回路フォームの構文エラー ({kind:?})。",
+            id.components().join("/"),
+            span.start,
+            span.end
         ),
         other => format!("ソースを読み込めない ({other:?})。"),
     }

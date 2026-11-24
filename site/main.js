@@ -1,4 +1,8 @@
+import { readProject } from "./project.js";
+
 const source = document.querySelector("#source");
+const project = document.querySelector("#project");
+const runningSource = document.querySelector("#running-source");
 const compile = document.querySelector("#compile");
 const reset = document.querySelector("#reset");
 const tick = document.querySelector("#tick");
@@ -8,14 +12,17 @@ const outputs = document.querySelector("#outputs");
 const position = document.querySelector("#position");
 
 let Simulation;
+let ProjectSettings;
+let decodeUtf8;
 let simulation;
 let tickNumber = 0n;
 let switches = [];
-let sourceEdited = false;
+let loadVersion = 0n;
 
 function clearSimulation() {
   simulation?.free();
   simulation = undefined;
+  runningSource.textContent = "";
   switches = [];
   inputs.replaceChildren();
   outputs.replaceChildren();
@@ -46,10 +53,10 @@ function resetSimulation() {
   status.textContent = "";
 }
 
-function loadSource() {
+function loadSimulation(create, label) {
   clearSimulation();
   try {
-    simulation = new Simulation(source.value);
+    simulation = create();
     const width = simulation.input_width();
     if (width > 256 || simulation.output_width() > 256) {
       throw new Error("この画面で表示できるのは、入力・出力それぞれ 256 ビットまで。");
@@ -63,6 +70,7 @@ function loadSource() {
       switches.push(input);
     }
     resetSimulation();
+    runningSource.textContent = label;
     reset.disabled = false;
     tick.disabled = false;
   } catch (error) {
@@ -71,8 +79,37 @@ function loadSource() {
   }
 }
 
+function loadSource() {
+  loadVersion += 1n;
+  loadSimulation(() => new Simulation(source.value), "実行中のソースは入力欄の main.ncg2。");
+}
+
+project.addEventListener("change", async () => {
+  const files = Array.from(project.files);
+  if (!files.length) return;
+  project.value = "";
+  loadVersion += 1n;
+  const version = loadVersion;
+  const isCurrent = () => loadVersion === version;
+  clearSimulation();
+  status.textContent = "プロジェクトを読み込み中。";
+  try {
+    const compiled = await readProject(files, ProjectSettings, decodeUtf8, isCurrent);
+    if (!isCurrent()) {
+      compiled?.free();
+      return;
+    }
+    const folder = files[0].webkitRelativePath.split("/")[0];
+    loadSimulation(() => compiled, `${folder}/circuitgame2.toml のプロジェクトを実行中。`);
+  } catch (error) {
+    if (isCurrent()) {
+      status.textContent = error instanceof Error ? error.message : String(error);
+    }
+  }
+});
+
 source.addEventListener("input", () => {
-  sourceEdited = true;
+  loadVersion += 1n;
   clearSimulation();
   status.textContent = "編集中のソースで実行するには、回路を読み込む。";
 });
@@ -91,18 +128,23 @@ tick.addEventListener("click", () => {
 });
 
 try {
-  const { default: init, Simulation: CircuitSimulation } = await import("./pkg/circuitgame2_web.js");
-  await init();
-  Simulation = CircuitSimulation;
+  const bindings = await import("./pkg/circuitgame2_web.js");
+  await bindings.default();
+  Simulation = bindings.Simulation;
+  ProjectSettings = bindings.ProjectSettings;
+  decodeUtf8 = bindings.decode_utf8;
   compile.disabled = false;
+  project.disabled = !("webkitdirectory" in project);
   const response = await fetch("./examples/main.ncg2");
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const example = await response.text();
-  if (!sourceEdited && !source.value) {
+  if (loadVersion === 0n && !source.value) {
     source.value = example;
     loadSource();
   }
 } catch (error) {
-  const subject = Simulation ? "例題" : "シミュレーター";
-  status.textContent = `${subject}を読み込めない。 ${error}`;
+  if (!Simulation || loadVersion === 0n) {
+    const subject = Simulation ? "例題" : "シミュレーター";
+    status.textContent = `${subject}を読み込めない。 ${error}`;
+  }
 }
