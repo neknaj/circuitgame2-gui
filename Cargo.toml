@@ -1,0 +1,14 @@
+[package]
+name = "circuitgame2-web"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "NCG2 の順序回路をブラウザーで実行する"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "0d8d9b683f91c91adb8475032870babb755ece61" }
+wasm-bindgen = "=0.2.129"

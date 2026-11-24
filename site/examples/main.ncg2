@@ -1,0 +1,7 @@
+(using nor)
+(latch hold (width 2))
+(module main
+  (in (data (bits 4)))
+  (out (q (bits 2)))
+  (def sampled (slice data 0 2 2))
+  (def q (hold sampled (bit data 1))))

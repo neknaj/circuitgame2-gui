@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NCG2 シミュレーター</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <main>
+    <h1>NCG2 シミュレーター</h1>
+    <label for="source">回路ソース（main.ncg2）</label>
+    <textarea id="source" rows="8" spellcheck="false" autocomplete="off"></textarea>
+    <div class="controls">
+      <button id="compile" disabled>回路を読み込む</button>
+      <button id="reset" disabled>リセット</button>
+      <button id="tick" disabled>1 tick 進める</button>
+    </div>
+    <p id="status" role="status">シミュレーターを読み込み中。</p>
+    <fieldset>
+      <legend>入力スイッチ</legend>
+      <div id="inputs" class="bits"></div>
+    </fieldset>
+    <fieldset>
+      <legend>出力 LED</legend>
+      <div id="outputs" class="bits" aria-hidden="true"></div>
+    </fieldset>
+    <p id="position" aria-live="polite">回路を読み込むと tick 番号を表示する。</p>
+  </main>
+</body>
+</html>
