@@ -43,3 +43,8 @@ fieldset {
   background: #146246;
   color: #fff;
 }
+
+#vram-bits {
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}

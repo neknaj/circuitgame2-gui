@@ -30,6 +30,17 @@
       <div id="outputs" class="bits" aria-hidden="true"></div>
     </fieldset>
     <p id="position" aria-live="polite">回路を読み込むと tick 番号を表示する。</p>
+    <fieldset id="vram" hidden>
+      <legend>公開 VRAM</legend>
+      <label for="vram-name">公開名</label>
+      <select id="vram-name"></select>
+      <div class="controls">
+        <button id="vram-previous">前の範囲</button>
+        <button id="vram-next">次の範囲</button>
+      </div>
+      <p id="vram-range" aria-live="polite"></p>
+      <output id="vram-bits" aria-label="VRAM の確定済みビット列" aria-live="off"></output>
+    </fieldset>
   </main>
 </body>
 </html>

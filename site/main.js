@@ -10,6 +10,13 @@ const status = document.querySelector("#status");
 const inputs = document.querySelector("#inputs");
 const outputs = document.querySelector("#outputs");
 const position = document.querySelector("#position");
+const vram = document.querySelector("#vram");
+const vramName = document.querySelector("#vram-name");
+const vramRange = document.querySelector("#vram-range");
+const vramBits = document.querySelector("#vram-bits");
+const previous = document.querySelector("#vram-previous");
+const next = document.querySelector("#vram-next");
+const vramPageSize = 128;
 
 let Simulation;
 let ProjectSettings;
@@ -18,17 +25,35 @@ let simulation;
 let tickNumber = 0n;
 let switches = [];
 let loadVersion = 0n;
+let vramOffset = 0;
 
 function clearSimulation() {
   simulation?.free();
   simulation = undefined;
   runningSource.textContent = "";
+  vram.hidden = true;
+  vramName.replaceChildren();
+  vramBits.textContent = "";
+  vramRange.textContent = "";
   switches = [];
   inputs.replaceChildren();
   outputs.replaceChildren();
   reset.disabled = true;
   tick.disabled = true;
   position.textContent = "回路を読み込むと tick 番号を表示する。";
+}
+
+function showVram() {
+  if (vram.hidden) return;
+  const name = vramName.value;
+  const bits = simulation.vram_page(name, vramOffset, vramPageSize);
+  const capacity = simulation.vram_bit_count(name);
+  const end = vramOffset + bits.length;
+  const range = `ビット ${vramOffset + 1}–${end}（全 ${capacity} ビット）`;
+  if (vramRange.textContent !== range) vramRange.textContent = range;
+  vramBits.textContent = bits;
+  previous.disabled = vramOffset === 0;
+  next.disabled = end >= capacity;
 }
 
 function showOutputs(bits) {
@@ -50,6 +75,7 @@ function resetSimulation() {
   tickNumber = 0n;
   for (const input of switches) input.checked = false;
   showOutputs(bits);
+  showVram();
   status.textContent = "";
 }
 
@@ -69,6 +95,15 @@ function loadSimulation(create, label) {
       inputs.append(label);
       switches.push(input);
     }
+    const names = simulation.vram_names();
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name || "（空の名前）";
+      vramName.append(option);
+    }
+    vramOffset = 0;
+    vram.hidden = names.length === 0;
     resetSimulation();
     runningSource.textContent = label;
     reset.disabled = false;
@@ -115,12 +150,25 @@ source.addEventListener("input", () => {
 });
 compile.addEventListener("click", loadSource);
 reset.addEventListener("click", resetSimulation);
+vramName.addEventListener("change", () => {
+  vramOffset = 0;
+  showVram();
+});
+previous.addEventListener("click", () => {
+  vramOffset -= vramPageSize;
+  showVram();
+});
+next.addEventListener("click", () => {
+  vramOffset += vramPageSize;
+  showVram();
+});
 tick.addEventListener("click", () => {
   try {
     const frame = switches.map((input) => input.checked ? "1" : "0").join("");
     const bits = simulation.tick(frame);
     tickNumber += 1n;
     showOutputs(bits);
+    showVram();
     status.textContent = "";
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : String(error);

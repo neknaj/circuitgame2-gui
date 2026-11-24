@@ -2,13 +2,13 @@
 
 mod config;
 
-use std::ops::Range;
+use std::{collections::BTreeSet, ops::Range};
 
 use circuitgame2_core::{
     project::{
         CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits, ModuleBodyPosition, NameKey,
-        SourceSnapshot, VramOutputError, analyze_definitions, check_use_aliases,
-        parse_circuit_project,
+        SourceSnapshot, VramDeclaration, VramOutputError, VramSetupError, analyze_definitions,
+        check_use_aliases, parse_circuit_project,
     },
     syntax::circuit::{CircuitFormError, Head},
 };
@@ -27,6 +27,7 @@ const LIMITS: ClockedModuleVmLimits = ClockedModuleVmLimits {
 #[wasm_bindgen]
 pub struct Simulation {
     compiled: ClockedModuleVm,
+    vram: Vec<(String, usize)>,
 }
 
 #[wasm_bindgen]
@@ -54,6 +55,28 @@ impl Simulation {
     /// 各 tick の回路出力に含まれるビット数を返す。
     pub fn output_width(&self) -> usize {
         self.compiled.outputs.total_bits()
+    }
+
+    /// RAM の公開名を設定の初出順で返す。
+    pub fn vram_names(&self) -> Vec<String> {
+        self.vram.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    /// 公開名が指す RAM の記憶容量をビット単位で返す。
+    ///
+    /// 名前が見つからない場合は `None` を返す。
+    pub fn vram_bit_count(&self, name: &str) -> Option<usize> {
+        self.vram_memory(name).map(<[bool]>::len)
+    }
+
+    /// 確定済みの RAM から `offset` 以降を最大 `count` ビット読み取る。
+    ///
+    /// 語はアドレス順、各語は最下位ビットから並ぶ。名前が見つからない場合や
+    /// `offset` が記憶部の末尾を超える場合は `None` を返す。
+    pub fn vram_page(&self, name: &str, offset: usize, count: usize) -> Option<String> {
+        let memory = self.vram_memory(name)?.get(offset..)?;
+        let len = memory.len().min(count);
+        Some(bit_text(memory[..len].iter().copied()))
     }
 
     /// 回路を初期状態へ戻し、tick 0 の出力を返す。
@@ -87,6 +110,11 @@ impl Simulation {
 }
 
 impl Simulation {
+    fn vram_memory(&self, name: &str) -> Option<&[bool]> {
+        let (_, index) = self.vram.iter().find(|(candidate, _)| candidate == name)?;
+        self.compiled.vm.ram_memory(*index)
+    }
+
     /// 解析済みの宣言が指すファイルとフォームを使って VM を構築する。
     fn from_snapshots(
         snapshots: &[SourceSnapshot<'_>],
@@ -144,23 +172,45 @@ impl Simulation {
         let position = ModuleBodyPosition { file, entry };
         let aliases = check_use_aliases(&analysis.aliases.targets)
             .map_err(|error| format!("別名を解決できない ({error:?})。"))?;
+        let declarations: Vec<_> = vram
+            .iter()
+            .map(|item| VramDeclaration {
+                name: &item.name,
+                read_output: item.read_output.get_ref(),
+            })
+            .collect();
         let compiled = aliases
-            .lower_clocked_vm(position, LIMITS)
-            .map_err(|error| format!("{name} を展開できない ({error:?})。"))?
+            .lower_clocked_vram(position, LIMITS, &declarations)
+            .map_err(|error| match error {
+                VramSetupError::Circuit(error) => format!("{name} を展開できない ({error:?})。"),
+                VramSetupError::Output { declaration, error } => {
+                    let span = vram.get(declaration).map(|item| item.read_output.span());
+                    config::at(span, &vram_error(error))
+                }
+                VramSetupError::Allocation => {
+                    "VRAM の公開設定を保持する領域を確保できない。".into()
+                }
+            })?
             .ok_or_else(|| at_entry(format!("{name} を実行できない。")))?;
-        for item in vram {
-            let read = &item.read_output;
-            let target = aliases
-                .resolve_vram_output(position, LIMITS.width, read.get_ref())
-                .map_err(|error| config::at(Some(read.span()), &vram_error(error)))?;
-            if target.is_none() {
-                return Err(config::at(
-                    Some(read.span()),
-                    "VRAM に対応する開始モジュールがない。",
-                ));
+        let mut names = BTreeSet::new();
+        let mut bindings = Vec::new();
+        for declaration in &declarations {
+            if names.insert(declaration.name) {
+                let index = compiled
+                    .vram_storage_index(declaration.name)
+                    .ok_or_else(|| {
+                        config::at(
+                            None,
+                            &format!("公開 VRAM {:?} の記憶部が見つからない。", declaration.name),
+                        )
+                    })?;
+                bindings.push((declaration.name.to_owned(), index));
             }
         }
-        Ok(Self { compiled })
+        Ok(Self {
+            compiled: compiled.into_module(),
+            vram: bindings,
+        })
     }
 }
 
@@ -208,7 +258,7 @@ fn source_error(error: CircuitProjectError<'_>) -> String {
     }
 }
 
-fn bit_text(bits: Vec<bool>) -> String {
+fn bit_text(bits: impl IntoIterator<Item = bool>) -> String {
     bits.into_iter()
         .map(|bit| if bit { '1' } else { '0' })
         .collect()

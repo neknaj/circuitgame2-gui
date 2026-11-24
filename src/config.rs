@@ -53,8 +53,7 @@ struct Device {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub(crate) struct Vram {
-    #[serde(rename = "name")]
-    _name: String,
+    pub(crate) name: String,
     pub(crate) read_output: Spanned<String>,
 }
 
