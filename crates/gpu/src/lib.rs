@@ -322,6 +322,9 @@ impl GpuNor32 {
             })
         }));
         match result {
+            Ok(Ok(_)) if self.unavailable.load(Ordering::Acquire) => {
+                Err(GpuNorError::DeviceUnavailable)
+            }
             Ok(Ok(_)) => Ok(()),
             Ok(Err(error)) => {
                 self.unavailable.store(true, Ordering::Release);
