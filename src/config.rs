@@ -100,7 +100,7 @@ impl ProjectSettings {
         if let Some(device) = config.device.first() {
             return Err(at(
                 Some(device.span()),
-                "この Web 版は外部デバイスの接続に未対応。",
+                "この GUI は外部デバイスの接続に未対応。",
             ));
         }
         let mut paths = Vec::new();
@@ -147,6 +147,17 @@ impl ProjectSettings {
     ///
     /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
     pub fn compile(&self, texts: Vec<String>) -> Result<Simulation, String> {
+        self.compile_texts(&texts)
+    }
+}
+
+impl ProjectSettings {
+    /// `source_paths()` と同じ順序の本文を借用してコンパイルする。
+    ///
+    /// # Errors
+    ///
+    /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
+    pub fn compile_texts(&self, texts: &[String]) -> Result<Simulation, String> {
         if texts.len() != self.paths.len() {
             return Err(at(None, "sources に対応する本文の件数が一致しない。"));
         }
@@ -157,7 +168,7 @@ impl ProjectSettings {
         let snapshots: Vec<_> = self
             .paths
             .iter()
-            .zip(&texts)
+            .zip(texts)
             .map(|((path, _), text)| SourceSnapshot {
                 path,
                 revision: 1,
@@ -185,7 +196,7 @@ fn source_path(value: &Spanned<String>) -> Result<String, String> {
     match path.source_kind() {
         Some(SourceKind::Circuit) => Ok(path.components().join("/")),
         Some(SourceKind::Functional) => Err(at_value(&format!(
-            "{raw:?} は NCG2M のソース。この Web 版は NCG2M の実行に未対応。"
+            "{raw:?} は NCG2M のソース。この GUI は NCG2M の実行に未対応。"
         ))),
         None => Err(at_value(&format!(
             "{raw:?} の拡張子には .ncg2 または .ncg2m を指定する。"

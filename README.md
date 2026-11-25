@@ -57,6 +57,8 @@ wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unk
 python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 ```
 
-この試作では、`::main` を含む単独の回路ソースを編集できる。フォルダーの取り込みと VRAM の閲覧は、上で説明したブラウザー版から使える。ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
+`circuitgame2.toml` を使う場合は、画面の「Open project folder」で設定ファイルがあるフォルダーを選ぶ。「Project source」で編集するファイルを切り替え、「Load circuit」で全ファイルの編集を反映する。編集中の内容は、そのプロジェクトを開いている間、メモリーに保持する。CLI リポジトリの [`examples/project`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/project) で試せる。VRAM を閲覧するには、上で説明したブラウザー版を使う。
+
+ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
 
 フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。
