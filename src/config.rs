@@ -107,23 +107,7 @@ impl ProjectSettings {
     ///
     /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
     pub fn compile_texts(&self, texts: &[String]) -> Result<Simulation, CompileError> {
-        if texts.len() != self.paths.len() {
-            return Err(at(None, "sources に対応する本文の件数が一致しない。").into());
-        }
-        // 先に指定したファイルの取得に失敗した場合は、ブラウザーがその診断を先に出す。
-        if let Some(error) = &self.path_failure {
-            return Err(error.clone().into());
-        }
-        let snapshots: Vec<_> = self
-            .paths
-            .iter()
-            .zip(texts)
-            .map(|((path, _), text)| SourceSnapshot {
-                path,
-                revision: 1,
-                text,
-            })
-            .collect();
+        let snapshots = self.snapshots(texts)?;
         let entry = self
             .entry
             .as_ref()
@@ -134,6 +118,59 @@ impl ProjectSettings {
             self.entry.as_ref().map(Spanned::span),
             &self.vram,
         )
+    }
+
+    /// 設定とソースを使い、デスクトップ GPU 向けの順序 NOR 回路を組み立てる。
+    ///
+    /// # Errors
+    ///
+    /// 本文の件数、ソース指定、開始モジュール、または回路の展開に問題がある場合と、
+    /// VRAM を設定した場合に失敗する。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compile_gpu_texts(
+        &self,
+        texts: &[String],
+    ) -> Result<circuitgame2_core::netlist::ClockedNor, CompileError> {
+        let snapshots = self.snapshots(texts)?;
+        if let Some(vram) = self.vram.first() {
+            return Err(at(
+                Some(vram.read_output.span()),
+                "GPU の順序 NOR 実行は VRAM に未対応。",
+            )
+            .into());
+        }
+        let entry = self
+            .entry
+            .as_ref()
+            .map_or("::main", |entry| entry.get_ref());
+        crate::gpu_source::compile_gpu_snapshots(
+            &snapshots,
+            entry,
+            self.entry.as_ref().map(Spanned::span),
+        )
+    }
+
+    fn snapshots<'a>(
+        &'a self,
+        texts: &'a [String],
+    ) -> Result<Vec<SourceSnapshot<'a>>, CompileError> {
+        if texts.len() != self.paths.len() {
+            return Err(at(None, "sources に対応する本文の件数が一致しない。").into());
+        }
+        // 先に指定したファイルの取得に失敗した場合は、ブラウザーがその診断を先に出す。
+        if let Some(error) = &self.path_failure {
+            return Err(error.clone().into());
+        }
+        Ok(self
+            .paths
+            .iter()
+            .zip(texts)
+            .map(|((path, _), text)| SourceSnapshot {
+                path,
+                revision: 1,
+                text,
+            })
+            .collect())
     }
 }
 

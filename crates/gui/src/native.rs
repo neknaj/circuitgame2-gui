@@ -22,7 +22,7 @@ pub(crate) fn open_folder(folder: &Path) -> Result<Project, String> {
     }
 
     Ok(Project {
-        settings,
+        settings: settings.into(),
         paths,
         texts,
     })

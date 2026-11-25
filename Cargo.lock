@@ -595,6 +595,8 @@ dependencies = [
 name = "circuitgame2-gui"
 version = "0.1.0"
 dependencies = [
+ "circuitgame2-core",
+ "circuitgame2-gpu",
  "circuitgame2-web",
  "eframe",
  "js-sys",

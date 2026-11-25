@@ -18,8 +18,11 @@ pub struct Workbench {
     simulation: Option<LoadedCircuit>,
     error: Option<CompileError>,
     pending_jump: Option<(usize, Range<usize>)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_batch: crate::gpu_batch::GpuBatch,
 }
 
+#[derive(Clone)]
 enum Sources {
     Single(String),
     Project(Project),
@@ -43,6 +46,8 @@ impl Default for Workbench {
             simulation: None,
             error: None,
             pending_jump: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_batch: crate::gpu_batch::GpuBatch::default(),
         };
         app.load_source();
         app
@@ -52,6 +57,8 @@ impl Default for Workbench {
 impl Workbench {
     pub(crate) fn open_project(&mut self, project: Project) {
         self.sources = Sources::Project(project);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.gpu_batch.invalidate();
         self.selected = 0;
         self.project_generation = self.project_generation.wrapping_add(1);
         self.load_source();
@@ -94,6 +101,8 @@ impl Workbench {
                         self.simulation = None;
                         self.error = None;
                         self.pending_jump = None;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        self.gpu_batch.invalidate();
                     }
                     if let Some((file, span)) = self.pending_jump.take()
                         && file == self.selected
@@ -107,29 +116,6 @@ impl Workbench {
                         ui.ctx().request_repaint();
                     }
                 });
-        }
-    }
-
-    fn show_error(&mut self, ui: &mut egui::Ui) {
-        let Some(error) = &self.error else {
-            return;
-        };
-        ui.label(RichText::new(error.to_string()).color(ui.visuals().error_fg_color));
-        let Some((path, span)) = error.source_location() else {
-            return;
-        };
-        let file = match &self.sources {
-            Sources::Single(_) => Some(0),
-            Sources::Project(project) => {
-                project.paths.iter().position(|candidate| candidate == path)
-            }
-        };
-        if let Some(file) = file
-            && ui.button("Go to error").clicked()
-        {
-            self.selected = file;
-            self.pending_jump = Some((file, span.clone()));
-            ui.ctx().request_repaint();
         }
     }
 
@@ -246,7 +232,40 @@ impl eframe::App for Workbench {
                 if ui.button("Load circuit").clicked() {
                     self.load_source();
                 }
-                self.show_error(ui);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.gpu_batch.poll(ui.ctx());
+                    if self.gpu_batch.show(ui) {
+                        let sources = self.sources.clone();
+                        self.gpu_batch
+                            .start(ui.ctx().clone(), move || match sources {
+                                Sources::Single(source) => {
+                                    circuitgame2_web::compile_gpu_source(&source)
+                                }
+                                Sources::Project(project) => {
+                                    project.settings.compile_gpu_texts(&project.texts)
+                                }
+                            });
+                    }
+                    if let Some(error) = self.gpu_batch.error() {
+                        show_diagnostic(
+                            ui,
+                            error,
+                            &self.sources,
+                            &mut self.selected,
+                            &mut self.pending_jump,
+                        );
+                    }
+                }
+                if let Some(error) = &self.error {
+                    show_diagnostic(
+                        ui,
+                        error,
+                        &self.sources,
+                        &mut self.selected,
+                        &mut self.pending_jump,
+                    );
+                }
 
                 let Some(circuit) = &mut self.simulation else {
                     return;
@@ -270,6 +289,47 @@ impl eframe::App for Workbench {
                 circuit.waveform.show(ui, circuit.tick);
             });
         });
+    }
+}
+
+fn show_diagnostic(
+    ui: &mut egui::Ui,
+    error: &CompileError,
+    sources: &Sources,
+    selected: &mut usize,
+    pending_jump: &mut Option<(usize, Range<usize>)>,
+) {
+    ui.label(RichText::new(error.to_string()).color(ui.visuals().error_fg_color));
+    let Some((path, span)) = error.source_location() else {
+        return;
+    };
+    let file_index = |path: &str| match sources {
+        Sources::Single(_) => Some(0),
+        Sources::Project(project) => project.paths.iter().position(|candidate| candidate == path),
+    };
+    let ctx = ui.ctx().clone();
+    let mut jump = |file, span: &Range<usize>| {
+        *selected = file;
+        *pending_jump = Some((file, span.clone()));
+        ctx.request_repaint();
+    };
+    if let Some(file) = file_index(path)
+        && ui.button("Go to error").clicked()
+    {
+        jump(file, span);
+    }
+    for location in error.related_source_locations() {
+        let range = &location.span;
+        if let Some(file) = file_index(&location.path)
+            && ui
+                .button(format!(
+                    "{} [{}..{}]",
+                    location.path, range.start, range.end
+                ))
+                .clicked()
+        {
+            jump(file, range);
+        }
     }
 }
 

@@ -1,11 +1,14 @@
 //! 編集できるプロジェクトの本文を、設定のソース順で保持する。
 
+use std::sync::Arc;
+
 use circuitgame2_web::{CompileError, ProjectSettings, Simulation};
 
 pub(crate) use circuitgame2_web::PROJECT_CONFIG_FILE_NAME as MANIFEST;
 
+#[derive(Clone)]
 pub(crate) struct Project {
-    pub(crate) settings: ProjectSettings,
+    pub(crate) settings: Arc<ProjectSettings>,
     pub(crate) paths: Vec<String>,
     pub(crate) texts: Vec<String>,
 }

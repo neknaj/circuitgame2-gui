@@ -128,7 +128,7 @@ async fn read_project(files: Map, signal: &AbortSignal) -> Result<Option<Project
     }
 
     Ok(Some(Project {
-        settings,
+        settings: settings.into(),
         paths,
         texts,
     }))

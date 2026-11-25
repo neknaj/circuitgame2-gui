@@ -37,7 +37,19 @@ python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 
 ## デスクトップ GPU の回路実行
 
-Rust から `circuitgame2-gpu` クレートに Core の検査済み配線を渡すと、同じ順序 NOR 回路を複数の入力列で並列に実行できる。Vulkan に対応した GPU が必要で、現在の GUI 画面は CPU で実行する。
+Rust から `circuitgame2-gpu` クレートに Core の検査済み配線を渡すと、同じ順序 NOR 回路を複数の入力列で並列に実行できる。デスクトップ版では Vulkan に対応した GPU を使う。
+
+画面で試すには、デスクトップ版を起動して次の回路をソース欄に貼り付ける。
+
+```lisp
+(using nor)
+(module main
+  (in (a (bits 1)))
+  (out (q (bits 1)))
+  (def q (nor a a)))
+```
+
+「GPU batch」では、ケースごとに 1 行を使う。各 tick の入力は空白で区切る。例えば `0 1 0` と `1 0 1` を別々の行に書いて「Run on GPU」を押す。「Case」と「Tick」で出力を選べる。tick 0 はリセット直後の出力を示す。GPU バッチが扱うのは、入出力ポートがすべて 1 ビットの順序 NOR 回路。標準のラッチ、RAM、外付け I/O を使う回路は対象外。
 
 実機テストでは CPU 版と出力や最終状態を比較し、複数回の GPU 投入をまたぐ tick 順を確認する。
 
