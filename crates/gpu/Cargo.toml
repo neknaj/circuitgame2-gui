@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99.1"
 
-description = "デスクトップ GPU で順序 NOR 回路を並列に実行する"
+description = "デスクトップ GPU で組み合わせ NOR 回路と順序 NOR 回路を並列に実行する"
 license = "MIT"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

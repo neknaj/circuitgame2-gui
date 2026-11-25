@@ -1,5 +1,9 @@
-//! デスクトップ GPU で順序 NOR 回路を実行する。
+//! デスクトップ GPU で組み合わせ NOR 回路と順序 NOR 回路を実行する。
 #![cfg(not(target_arch = "wasm32"))]
+
+mod combinational;
+
+pub use combinational::GpuCombinationalNor32;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{
@@ -42,7 +46,7 @@ pub enum GpuNorError {
     Gpu(wgpu::Error),
     /// 初期状態の長さがゲート数とレーンワード数に合わない。
     InitialStateLength,
-    /// 入力の長さがポート数、レーンワード数、tick 数に合わない。
+    /// 入力の長さがポート数とレーンワード数に合わない。順序評価では tick 数も照合する。
     InputLength,
     /// レーンワード数または GPU で使う添字や資源の大きさが許容範囲外である。
     ResourceLimit,
@@ -151,9 +155,7 @@ fn upload(device: &wgpu::Device, words: &[u32], empty: &[u32]) -> wgpu::Buffer {
 /// Core の [順序 NOR 配線][PackedNorLayout32] を使う。1 ビットが 1 レーンを表し、
 /// 各 tick のゲート更新は更新前の状態を読み、公開出力は更新後の状態を読む。
 pub struct GpuNor32 {
-    device: wgpu::Device,
-    unavailable: Arc<AtomicBool>,
-    queue: wgpu::Queue,
+    gpu: GpuDevice,
     layout: PackedNorLayout32,
     bindings: wgpu::BindGroupLayout,
     advance: wgpu::ComputePipeline,
@@ -169,32 +171,10 @@ impl GpuNor32 {
     ///
     /// 対応 GPU の取得、回路の転送、またはパイプラインの作成に失敗した場合にエラーを返す。
     pub fn new(layout: PackedNorLayout32) -> Result<Self, GpuNorError> {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
-        let instance = wgpu::Instance::new(descriptor);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .map_err(|_| GpuNorError::AdapterUnavailable)?;
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu
-            || !adapter
-                .get_downlevel_capabilities()
-                .flags
-                .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
-        {
-            return Err(GpuNorError::AdapterUnavailable);
-        }
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(GpuNorError::Device)?;
-        let unavailable = Arc::new(AtomicBool::new(false));
-        let device_unavailable = Arc::clone(&unavailable);
-        device.set_device_lost_callback(move |_, _| {
-            device_unavailable.store(true, Ordering::Release)
-        });
+        let gpu = GpuDevice::new()?;
+        let device = &gpu.device;
         Shape::check(&layout, 1, 0, &device.limits()).ok_or(GpuNorError::ResourceLimit)?;
-        let (bindings, advance, observe, wiring, ports) = scoped(&device, || {
+        let (bindings, advance, observe, wiring, ports) = scoped(device, || {
             let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("NCG2 packed NOR"),
                 entries: &(0..BINDINGS)
@@ -231,25 +211,11 @@ impl GpuNor32 {
                     cache: None,
                 })
             });
-            // Core が配線の添字を source_count 未満に制限し、Shape がその上限を u32 で表せることを確認した。
-            let routes: Vec<_> = layout
-                .gates()
-                .iter()
-                .flat_map(|gate| [gate.left as u32, gate.right as u32])
-                .collect();
-            let ports: Vec<_> = layout.outputs().iter().map(|port| *port as u32).collect();
-            (
-                bindings,
-                advance,
-                observe,
-                upload(&device, &routes, &[0, 0]),
-                upload(&device, &ports, &[0]),
-            )
+            let (wiring, ports) = upload_layout(device, &layout);
+            (bindings, advance, observe, wiring, ports)
         })?;
         Ok(Self {
-            device,
-            unavailable,
-            queue,
+            gpu,
             layout,
             bindings,
             advance,
@@ -261,7 +227,7 @@ impl GpuNor32 {
 
     /// 実行に使用する GPU アダプターの情報を返す。
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
-        self.device.adapter_info()
+        self.gpu.device.adapter_info()
     }
 
     /// 指定のレーンワード数と tick 数で必要なバッファーとディスパッチを検査する。
@@ -277,10 +243,8 @@ impl GpuNor32 {
     }
 
     fn shape(&self, lane_words: u32, ticks: u32) -> Result<Shape, GpuNorError> {
-        if self.unavailable.load(Ordering::Acquire) {
-            return Err(GpuNorError::DeviceUnavailable);
-        }
-        Shape::check(&self.layout, lane_words, ticks, &self.device.limits())
+        self.gpu.check_available()?;
+        Shape::check(&self.layout, lane_words, ticks, &self.gpu.device.limits())
             .ok_or(GpuNorError::ResourceLimit)
     }
 
@@ -321,36 +285,11 @@ impl GpuNor32 {
                 outputs: Vec::new(),
             });
         }
-        let trace = scoped(&self.device, || self.execute(shape, ticks, initial, frames))??;
-        if self.unavailable.load(Ordering::Acquire) {
-            return Err(GpuNorError::DeviceUnavailable);
-        }
+        let trace = scoped(&self.gpu.device, || {
+            self.execute(shape, ticks, initial, frames)
+        })??;
+        self.gpu.check_available()?;
         Ok(trace)
-    }
-
-    fn wait(&self, submission: wgpu::SubmissionIndex) -> Result<(), GpuNorError> {
-        // wgpu 30 のネイティブ版は、一部のデバイス障害を PollError で返さず panic にする。
-        // この呼び出しから復帰しても、そのデバイスには後続の計算を投入しない。
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            self.device.poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: Some(SUBMIT_TIMEOUT),
-            })
-        }));
-        match result {
-            Ok(Ok(_)) if self.unavailable.load(Ordering::Acquire) => {
-                Err(GpuNorError::DeviceUnavailable)
-            }
-            Ok(Ok(_)) => Ok(()),
-            Ok(Err(error)) => {
-                self.unavailable.store(true, Ordering::Release);
-                Err(GpuNorError::Wait(error))
-            }
-            Err(_) => {
-                self.unavailable.store(true, Ordering::Release);
-                Err(GpuNorError::DeviceUnavailable)
-            }
-        }
     }
 
     fn execute(
@@ -360,7 +299,7 @@ impl GpuNor32 {
         initial: &[u32],
         frames: &[u32],
     ) -> Result<Trace, GpuNorError> {
-        let device = &self.device;
+        let device = &self.gpu.device;
         let (state_bytes, trace_bytes) =
             (byte_size(shape.state_words), byte_size(shape.trace_words));
         let states = [
@@ -453,8 +392,8 @@ impl GpuNor32 {
                 }
             }
             if (tick + 1) % TICKS_PER_SUBMIT == 0 && tick + 1 != ticks {
-                let submitted = self.queue.submit([commands.finish()]);
-                self.wait(submitted)?;
+                let submitted = self.gpu.queue.submit([commands.finish()]);
+                self.gpu.wait(submitted)?;
                 commands =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             }
@@ -471,7 +410,112 @@ impl GpuNor32 {
         if trace_bytes != 0 {
             commands.copy_buffer_to_buffer(&trace, 0, &download, state_bytes, trace_bytes);
         }
-        let submitted = self.queue.submit([commands.finish()]);
+        let submitted = self.gpu.queue.submit([commands.finish()]);
+        self.gpu.readback(&download, submitted, |words| {
+            let (gates, outputs) = words.split_at(shape.state_words as usize);
+            Trace {
+                gates: gates.to_vec(),
+                outputs: outputs.to_vec(),
+            }
+        })
+    }
+}
+
+fn upload_layout(
+    device: &wgpu::Device,
+    layout: &PackedNorLayout32,
+) -> (wgpu::Buffer, wgpu::Buffer) {
+    // Core は配線番号を source_count 未満に制限する。呼び出し側はその上限を u32 で検査済み。
+    let routes: Vec<_> = layout
+        .gates()
+        .iter()
+        .flat_map(|gate| [gate.left as u32, gate.right as u32])
+        .collect();
+    let ports: Vec<_> = layout.outputs().iter().map(|port| *port as u32).collect();
+    (
+        upload(device, &routes, &[0, 0]),
+        upload(device, &ports, &[0]),
+    )
+}
+
+struct GpuDevice {
+    device: wgpu::Device,
+    unavailable: Arc<AtomicBool>,
+    queue: wgpu::Queue,
+}
+
+impl GpuDevice {
+    fn new() -> Result<Self, GpuNorError> {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::VULKAN;
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .map_err(|_| GpuNorError::AdapterUnavailable)?;
+        if adapter.get_info().device_type == wgpu::DeviceType::Cpu
+            || !adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+        {
+            return Err(GpuNorError::AdapterUnavailable);
+        }
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(GpuNorError::Device)?;
+        let unavailable = Arc::new(AtomicBool::new(false));
+        let device_unavailable = Arc::clone(&unavailable);
+        device.set_device_lost_callback(move |_, _| {
+            device_unavailable.store(true, Ordering::Release)
+        });
+        Ok(Self {
+            device,
+            unavailable,
+            queue,
+        })
+    }
+
+    fn check_available(&self) -> Result<(), GpuNorError> {
+        if self.unavailable.load(Ordering::Acquire) {
+            Err(GpuNorError::DeviceUnavailable)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn wait(&self, submission: wgpu::SubmissionIndex) -> Result<(), GpuNorError> {
+        // wgpu 30 のネイティブ版は、一部のデバイス障害を PollError で返さず panic にする。
+        // この呼び出しから復帰しても、そのデバイスには後続の計算を投入しない。
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            self.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: Some(SUBMIT_TIMEOUT),
+            })
+        }));
+        match result {
+            Ok(Ok(_)) if self.unavailable.load(Ordering::Acquire) => {
+                Err(GpuNorError::DeviceUnavailable)
+            }
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(error)) => {
+                self.unavailable.store(true, Ordering::Release);
+                Err(GpuNorError::Wait(error))
+            }
+            Err(_) => {
+                self.unavailable.store(true, Ordering::Release);
+                Err(GpuNorError::DeviceUnavailable)
+            }
+        }
+    }
+
+    fn readback<T>(
+        &self,
+        download: &wgpu::Buffer,
+        submitted: wgpu::SubmissionIndex,
+        read: impl FnOnce(&[u32]) -> T,
+    ) -> Result<T, GpuNorError> {
         let slice = download.slice(..);
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -486,11 +530,7 @@ impl GpuNor32 {
             .get_mapped_range()
             .map_err(|_| GpuNorError::Readback)?;
         let words: &[u32] = bytemuck::try_cast_slice(&bytes).map_err(|_| GpuNorError::Readback)?;
-        let (gates, outputs) = words.split_at(shape.state_words as usize);
-        Ok(Trace {
-            gates: gates.to_vec(),
-            outputs: outputs.to_vec(),
-        })
+        Ok(read(words))
     }
 }
 
