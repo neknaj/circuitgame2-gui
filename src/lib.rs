@@ -4,6 +4,7 @@ mod config;
 mod diagnostic;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_source;
+mod ports;
 
 use std::{collections::BTreeSet, ops::Range};
 
@@ -37,6 +38,8 @@ const LIMITS: ClockedModuleVmLimits = ClockedModuleVmLimits {
 pub struct Simulation {
     compiled: ClockedModuleVm,
     vram: Vec<(String, usize)>,
+    inputs: Vec<ports::Port>,
+    outputs: Vec<ports::Port>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -114,6 +117,20 @@ impl Simulation {
 }
 
 impl Simulation {
+    /// 入力フレームの添字に対応する信号名を返す。
+    ///
+    /// 複数ビットのポートには最下位を 0 とした添字を付ける。範囲外なら `None`。
+    pub fn input_signal_name(&self, bit: usize) -> Option<String> {
+        ports::signal_name(&self.inputs, bit)
+    }
+
+    /// 出力フレームの添字に対応する信号名を返す。
+    ///
+    /// 複数ビットのポートには最下位を 0 とした添字を付ける。範囲外なら `None`。
+    pub fn output_signal_name(&self, bit: usize) -> Option<String> {
+        ports::signal_name(&self.outputs, bit)
+    }
+
     /// UTF-8 の単独ソースから `::main` をコンパイルし、構文診断の位置を保持する。
     ///
     /// # Errors
@@ -156,9 +173,14 @@ impl Simulation {
         name_span: Option<Range<usize>>,
         vram: &[config::Vram],
     ) -> Result<Self, CompileError> {
-        with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
-            Self::lower_module(aliases, position, name, &name_span, vram)
-        })
+        with_module_entry(
+            snapshots,
+            name,
+            name_span.clone(),
+            |project, aliases, position| {
+                Self::lower_module(project, aliases, position, name, &name_span, vram)
+            },
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -173,9 +195,9 @@ impl Simulation {
             name,
             &name_span,
             "開始回路",
-            |_, aliases, position, head| match head {
+            |project, aliases, position, head| match head {
                 Head::Module => {
-                    Self::lower_module(aliases, position, name, &name_span, vram).map(Some)
+                    Self::lower_module(project, aliases, position, name, &name_span, vram).map(Some)
                 }
                 Head::Func => Ok(None),
                 _ => Err(entry_message(
@@ -188,6 +210,7 @@ impl Simulation {
     }
 
     fn lower_module(
+        project: &CircuitProject<'_>,
         aliases: &UseAliases<'_, '_, '_>,
         position: ModuleBodyPosition,
         name: &str,
@@ -216,6 +239,14 @@ impl Simulation {
                 }
             })?
             .ok_or_else(|| entry_message(name_span, format!("{name} を実行できない。")))?;
+        let (inputs, outputs) =
+            ports::module_ports(project, position, compiled.inputs(), compiled.outputs())
+                .ok_or_else(|| {
+                    entry_message(
+                        name_span,
+                        format!("{name} のポート名とビット配置を対応付けられない。"),
+                    )
+                })?;
         let mut names = BTreeSet::new();
         let mut bindings = Vec::new();
         for declaration in &declarations {
@@ -234,6 +265,8 @@ impl Simulation {
         Ok(Self {
             compiled: compiled.into_module(),
             vram: bindings,
+            inputs,
+            outputs,
         })
     }
 }
@@ -250,14 +283,18 @@ fn with_module_entry<T>(
     snapshots: &[SourceSnapshot<'_>],
     name: &str,
     name_span: Option<Range<usize>>,
-    compile: impl FnOnce(&UseAliases<'_, '_, '_>, ModuleBodyPosition) -> Result<T, CompileError>,
+    compile: impl FnOnce(
+        &CircuitProject<'_>,
+        &UseAliases<'_, '_, '_>,
+        ModuleBodyPosition,
+    ) -> Result<T, CompileError>,
 ) -> Result<T, CompileError> {
     with_circuit_entry(
         snapshots,
         name,
         &name_span,
         "開始モジュール",
-        |_, aliases, position, head| {
+        |project, aliases, position, head| {
             if head != Head::Module {
                 return Err(entry_message(
                     &name_span,
@@ -265,7 +302,7 @@ fn with_module_entry<T>(
                 )
                 .into());
             }
-            compile(aliases, position)
+            compile(project, aliases, position)
         },
     )
 }
