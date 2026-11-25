@@ -4,6 +4,7 @@
 mod native;
 mod project;
 mod vram;
+mod waveform;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod workbench;

@@ -61,6 +61,8 @@ python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 
 公開した RAM は「VRAM」に表示される。記憶部はアドレス順に並び、各語を最下位ビットから表示する。128 ビットを超える記憶部は「Previous」「Next」で表示範囲を切り替える。CLI リポジトリの [`examples/vram`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/vram) で試せる。
 
+「Waveform」では、各 tick に渡した入力と回路が返した出力から、表示するビットを選べる。直近の最大 128 サンプルを保持する。リセットすると、tick 0 の初期値から記録を始める。
+
 ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
 
 フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。

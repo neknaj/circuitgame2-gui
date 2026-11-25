@@ -6,7 +6,7 @@ use circuitgame2_web::{CompileError, Simulation};
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{self, RichText, TextEdit};
 
-use crate::{project::Project, vram::VramPanel};
+use crate::{project::Project, vram::VramPanel, waveform::Waveform};
 
 const EXAMPLE: &str = include_str!("../../../site/examples/main.ncg2");
 
@@ -31,6 +31,7 @@ struct LoadedCircuit {
     outputs: String,
     tick: u64,
     vram: VramPanel,
+    waveform: Waveform,
 }
 
 impl Default for Workbench {
@@ -145,12 +146,15 @@ impl Workbench {
                 let inputs = vec![false; vm.input_width()];
                 let outputs = vm.reset();
                 let vram = VramPanel::new(&vm);
+                let mut waveform = Waveform::new(vm.input_width(), vm.output_width());
+                waveform.record(&inputs, &outputs);
                 self.simulation = Some(LoadedCircuit {
                     vm,
                     inputs,
                     outputs,
                     tick: 0,
                     vram,
+                    waveform,
                 });
             }
             Err(error) => self.error = Some(error),
@@ -163,6 +167,7 @@ impl LoadedCircuit {
         self.inputs.fill(false);
         self.outputs = self.vm.reset();
         self.tick = 0;
+        self.waveform.reset(&self.inputs, &self.outputs);
     }
 
     fn show_inputs(&mut self, ui: &mut egui::Ui) {
@@ -211,6 +216,7 @@ impl LoadedCircuit {
             .collect();
         self.outputs = self.vm.tick(&frame)?;
         self.tick = tick;
+        self.waveform.record(&self.inputs, &self.outputs);
         Ok(())
     }
 }
@@ -261,6 +267,7 @@ impl eframe::App for Workbench {
                 ui.label("Outputs");
                 circuit.show_outputs(ui);
                 circuit.vram.show(ui, &circuit.vm);
+                circuit.waveform.show(ui, circuit.tick);
             });
         });
     }
