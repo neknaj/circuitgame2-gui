@@ -9,9 +9,10 @@ use std::{collections::BTreeSet, ops::Range};
 
 use circuitgame2_core::{
     project::{
-        CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits, ModuleBodyPosition, NameKey,
-        PreparedDefinitionError, SourceSnapshot, UseAliases, VramDeclaration, VramOutputError,
-        VramSetupError, parse_circuit_project, prepare_definition_analysis,
+        CircuitProject, CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits,
+        ModuleBodyPosition, NameKey, PreparedDefinitionError, SourceSnapshot, UseAliases,
+        VramDeclaration, VramOutputError, VramSetupError, parse_circuit_project,
+        prepare_definition_analysis,
     },
     syntax::circuit::Head,
 };
@@ -19,7 +20,7 @@ pub use circuitgame2_project_config::FILE_NAME as PROJECT_CONFIG_FILE_NAME;
 pub use config::{ProjectSettings, decode_utf8};
 pub use diagnostic::{CompileError, SourceLocation};
 #[cfg(not(target_arch = "wasm32"))]
-pub use gpu_source::compile_gpu_source;
+pub use gpu_source::{GpuBatchCircuit, compile_gpu_batch_source, compile_gpu_source};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -127,6 +128,23 @@ impl Simulation {
         Self::from_snapshots(&snapshots, "::main", None, &[])
     }
 
+    /// デスクトップ画面の単独ソースを読み込み、`module` なら順序回路を作る。
+    ///
+    /// 開始宣言が `func` の場合は `None` を返す。組み合わせ評価は画面の GPU バッチから行う。
+    ///
+    /// # Errors
+    ///
+    /// ソースや開始宣言に問題があるか、モジュールの配線・型・資源上限を満たさない場合に失敗する。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compile_workbench(source: &str) -> Result<Option<Self>, CompileError> {
+        let snapshots = [SourceSnapshot {
+            path: "main.ncg2",
+            revision: 1,
+            text: source,
+        }];
+        Self::workbench_from_snapshots(&snapshots, "::main", None, &[])
+    }
+
     fn vram_memory(&self, name: &str) -> Option<&[bool]> {
         let (_, index) = self.vram.iter().find(|(candidate, _)| candidate == name)?;
         self.compiled.vm.ram_memory(*index)
@@ -139,50 +157,83 @@ impl Simulation {
         vram: &[config::Vram],
     ) -> Result<Self, CompileError> {
         with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
-            let declarations: Vec<_> = vram
-                .iter()
-                .map(|item| VramDeclaration {
-                    name: &item.name,
-                    read_output: item.read_output.get_ref(),
-                })
-                .collect();
-            let compiled = aliases
-                .lower_clocked_vram(position, LIMITS, &declarations)
-                .map_err(|error| match error {
-                    VramSetupError::Circuit(error) => {
-                        format!("{name} を展開できない ({error:?})。")
-                    }
-                    VramSetupError::Output { declaration, error } => {
-                        let span = vram.get(declaration).map(|item| item.read_output.span());
-                        config::at(span, &vram_error(error))
-                    }
-                    VramSetupError::Allocation => {
-                        "VRAM の公開設定を保持する領域を確保できない。".into()
-                    }
-                })?
-                .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")))?;
-            let mut names = BTreeSet::new();
-            let mut bindings = Vec::new();
-            for declaration in &declarations {
-                if names.insert(declaration.name) {
-                    let index = compiled
-                        .vram_storage_index(declaration.name)
-                        .ok_or_else(|| {
-                            config::at(
-                                None,
-                                &format!(
-                                    "公開 VRAM {:?} の記憶部が見つからない。",
-                                    declaration.name
-                                ),
-                            )
-                        })?;
-                    bindings.push((declaration.name.to_owned(), index));
+            Self::lower_module(aliases, position, name, &name_span, vram)
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn workbench_from_snapshots(
+        snapshots: &[SourceSnapshot<'_>],
+        name: &str,
+        name_span: Option<Range<usize>>,
+        vram: &[config::Vram],
+    ) -> Result<Option<Self>, CompileError> {
+        with_circuit_entry(
+            snapshots,
+            name,
+            &name_span,
+            "開始回路",
+            |_, aliases, position, head| match head {
+                Head::Module => {
+                    Self::lower_module(aliases, position, name, &name_span, vram).map(Some)
                 }
-            }
-            Ok(Self {
-                compiled: compiled.into_module(),
-                vram: bindings,
+                Head::Func => Ok(None),
+                _ => Err(entry_message(
+                    &name_span,
+                    format!("{name} は func または module を指す必要がある。"),
+                )
+                .into()),
+            },
+        )
+    }
+
+    fn lower_module(
+        aliases: &UseAliases<'_, '_, '_>,
+        position: ModuleBodyPosition,
+        name: &str,
+        name_span: &Option<Range<usize>>,
+        vram: &[config::Vram],
+    ) -> Result<Self, CompileError> {
+        let declarations: Vec<_> = vram
+            .iter()
+            .map(|item| VramDeclaration {
+                name: &item.name,
+                read_output: item.read_output.get_ref(),
             })
+            .collect();
+        let compiled = aliases
+            .lower_clocked_vram(position, LIMITS, &declarations)
+            .map_err(|error| match error {
+                VramSetupError::Circuit(error) => {
+                    format!("{name} を展開できない ({error:?})。")
+                }
+                VramSetupError::Output { declaration, error } => {
+                    let span = vram.get(declaration).map(|item| item.read_output.span());
+                    config::at(span, &vram_error(error))
+                }
+                VramSetupError::Allocation => {
+                    "VRAM の公開設定を保持する領域を確保できない。".into()
+                }
+            })?
+            .ok_or_else(|| entry_message(name_span, format!("{name} を実行できない。")))?;
+        let mut names = BTreeSet::new();
+        let mut bindings = Vec::new();
+        for declaration in &declarations {
+            if names.insert(declaration.name) {
+                let index = compiled
+                    .vram_storage_index(declaration.name)
+                    .ok_or_else(|| {
+                        config::at(
+                            None,
+                            &format!("公開 VRAM {:?} の記憶部が見つからない。", declaration.name),
+                        )
+                    })?;
+                bindings.push((declaration.name.to_owned(), index));
+            }
+        }
+        Ok(Self {
+            compiled: compiled.into_module(),
+            vram: bindings,
         })
     }
 }
@@ -201,6 +252,36 @@ fn with_module_entry<T>(
     name_span: Option<Range<usize>>,
     compile: impl FnOnce(&UseAliases<'_, '_, '_>, ModuleBodyPosition) -> Result<T, CompileError>,
 ) -> Result<T, CompileError> {
+    with_circuit_entry(
+        snapshots,
+        name,
+        &name_span,
+        "開始モジュール",
+        |_, aliases, position, head| {
+            if head != Head::Module {
+                return Err(entry_message(
+                    &name_span,
+                    format!("{name} は module を指す必要がある。"),
+                )
+                .into());
+            }
+            compile(aliases, position)
+        },
+    )
+}
+
+fn with_circuit_entry<T>(
+    snapshots: &[SourceSnapshot<'_>],
+    name: &str,
+    name_span: &Option<Range<usize>>,
+    entry_label: &str,
+    compile: impl FnOnce(
+        &CircuitProject<'_>,
+        &UseAliases<'_, '_, '_>,
+        ModuleBodyPosition,
+        Head,
+    ) -> Result<T, CompileError>,
+) -> Result<T, CompileError> {
     let project = parse_circuit_project(snapshots).map_err(|error| match error {
         CircuitProjectError::Syntax { id, error, .. } => CompileError::Syntax {
             path: id.components().join("/"),
@@ -211,19 +292,19 @@ fn with_module_entry<T>(
     let prepared = prepare_definition_analysis(&project)
         .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
     let analysis = prepared.resolve().map_err(|error| match error {
-        PreparedDefinitionError::Alias(error) => format!("宣言を検査できない。 {error:?}"),
+        PreparedDefinitionError::Alias(error) => format!("宣言を検査できない。 {error:?}").into(),
         PreparedDefinitionError::Definition { error, .. } => {
-            format!("定義内の参照を解決できない。 {error:?}")
+            diagnostic::definition_reference_error(error.site, error.reason)
         }
     })?;
-    let at_entry = |message: String| entry_message(&name_span, message);
+    let at_entry = |message: String| entry_message(name_span, message);
     let qualified = name
         .strip_prefix("::")
         .filter(|path| {
             path.split("::")
                 .all(|part| !part.is_empty() && !part.contains(':'))
         })
-        .ok_or_else(|| at_entry("開始モジュールを完全修飾名で指定する。".into()))?;
+        .ok_or_else(|| at_entry(format!("{entry_label}を完全修飾名で指定する。")))?;
     let (parent, unqualified) = qualified
         .rsplit_once("::")
         .map_or((None, qualified), |(parent, tail)| (Some(parent), tail));
@@ -237,9 +318,6 @@ fn with_module_entry<T>(
         .declarations()
         .declaration(key)
         .ok_or_else(|| at_entry(format!("{name} の宣言がない。")))?;
-    if declaration.head != Head::Module {
-        return Err(at_entry(format!("{name} は module を指す必要がある。")).into());
-    }
     let file = project
         .sources()
         .iter()
@@ -257,7 +335,7 @@ fn with_module_entry<T>(
         })
         .ok_or_else(|| at_entry(format!("{name} の宣言位置が見つからない。")))?;
     let position = ModuleBodyPosition { file, entry };
-    compile(analysis.aliases(), position)
+    compile(&project, analysis.aliases(), position, declaration.head)
 }
 
 /// 設定側の主範囲に加え、読み出し信号が指した定義の範囲を示す。

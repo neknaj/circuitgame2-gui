@@ -6,9 +6,9 @@ use std::{
     time::Duration,
 };
 
-use circuitgame2_core::netlist::ClockedNor;
-use circuitgame2_gpu::GpuNor32;
-use circuitgame2_web::CompileError;
+use circuitgame2_core::netlist::{ClockedNor, PackedCombinationalLayout32};
+use circuitgame2_gpu::{GpuCombinationalNor32, GpuNor32};
+use circuitgame2_web::{CompileError, GpuBatchCircuit};
 use eframe::egui;
 
 pub(crate) struct GpuBatch {
@@ -45,8 +45,8 @@ impl GpuBatch {
 
     pub(crate) fn show(&mut self, ui: &mut egui::Ui) -> bool {
         ui.collapsing("GPU batch", |ui| {
-            ui.label("One case per line. Separate tick inputs with spaces. Use - for a circuit with no inputs.");
-            ui.label("Requires Vulkan and one-bit ports. Built-in latches, RAM, and external devices are unavailable.");
+            ui.label("One case per line. For a func, enter one input frame per case. For a module, separate tick inputs with spaces. Use - for no inputs.");
+            ui.label("Requires Vulkan. Built-in latches, RAM, and external devices are unavailable.");
             if ui.add(egui::TextEdit::multiline(&mut self.input).desired_rows(3)
                     .code_editor().desired_width(f32::INFINITY)).changed() {
                 self.invalidate();
@@ -58,7 +58,9 @@ impl GpuBatch {
             if let Some(output) = &self.output {
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(&mut self.case).range(1..=output.cases).prefix("Case "));
-                    ui.add(egui::DragValue::new(&mut self.tick).range(0..=output.ticks).prefix("Tick "));
+                    if let Some(ticks) = output.ticks {
+                        ui.add(egui::DragValue::new(&mut self.tick).range(0..=ticks).prefix("Tick "));
+                    }
                 });
                 let bits = output.bits(self.case - 1, self.tick);
                 if bits.is_empty() {
@@ -76,7 +78,7 @@ impl GpuBatch {
     pub(crate) fn start(
         &mut self,
         ctx: egui::Context,
-        compile: impl FnOnce() -> Result<ClockedNor, CompileError> + Send + 'static,
+        compile: impl FnOnce() -> Result<GpuBatchCircuit, CompileError> + Send + 'static,
     ) {
         if self.job.is_some() {
             return;
@@ -88,7 +90,10 @@ impl GpuBatch {
         let job = thread::Builder::new()
             .name("ncg2-gpu-batch".into())
             .spawn(move || {
-                let result = compile().and_then(|circuit| evaluate(&circuit, &input));
+                let result = compile().and_then(|circuit| match circuit {
+                    GpuBatchCircuit::Combinational(layout) => evaluate_combinational(layout, &input),
+                    GpuBatchCircuit::Clocked(circuit) => evaluate(&circuit, &input),
+                });
                 let _ = sender.send(result);
                 repaint.request_repaint();
             });
@@ -141,23 +146,25 @@ impl GpuBatch {
 
 struct BatchOutput {
     cases: usize,
-    ticks: usize,
+    ticks: Option<usize>,
     words: usize,
+    output_width: usize,
     reset: Vec<bool>,
     trace: Vec<u32>,
 }
 
 impl BatchOutput {
     fn bits(&self, case: usize, tick: usize) -> String {
-        if tick == 0 {
+        if self.ticks.is_some() && tick == 0 {
             return self.reset.iter().copied().map(bit_char).collect();
         }
-        let width = self.reset.len();
+        let frame = if self.ticks.is_some() { tick - 1 } else { 0 };
+        let width = self.output_width;
         let word = case / 32;
         let mask = 1u32 << (case % 32);
         (0..width)
             .map(|port| {
-                let offset = ((tick - 1) * width + port) * self.words + word;
+                let offset = (frame * width + port) * self.words + word;
                 bit_char(self.trace[offset] & mask != 0)
             })
             .collect()
@@ -280,10 +287,34 @@ fn evaluate(circuit: &ClockedNor, text: &str) -> Result<BatchOutput, CompileErro
         .map_err(|error| format!("GPU で実行できない。{error:?}"))?;
     Ok(BatchOutput {
         cases: inputs.cases,
-        ticks: inputs.ticks,
+        ticks: Some(inputs.ticks),
         words: inputs.words,
+        output_width: reset.outputs.len(),
         reset: reset.outputs,
         trace: trace.outputs,
+    })
+}
+
+fn evaluate_combinational(
+    layout: PackedCombinationalLayout32,
+    text: &str,
+) -> Result<BatchOutput, CompileError> {
+    let input = BatchInput::parse(text, layout.layout().input_count())?;
+    if input.ticks != 1 {
+        return Err("組み合わせ回路にはケースごとに入力を一つだけ指定する。".to_owned().into());
+    }
+    let words = u32::try_from(input.words)
+        .map_err(|_| "ケース数が GPU の上限を超えた。".to_owned())?;
+    let output_width = layout.layout().outputs().len();
+    let mut gpu = GpuCombinationalNor32::new(layout)
+        .map_err(|error| format!("GPU を初期化できない。{error:?}"))?;
+    gpu.check_batch(words)
+        .map_err(|error| format!("GPU で実行するバッチの寸法を検査できない。{error:?}"))?;
+    let trace = gpu.evaluate(words, &input.pack()?)
+        .map_err(|error| format!("GPU で実行できない。{error:?}"))?;
+    Ok(BatchOutput {
+        cases: input.cases, ticks: None, words: input.words, output_width,
+        reset: Vec::new(), trace,
     })
 }
 
@@ -307,8 +338,9 @@ mod tests {
 
         let result = BatchOutput {
             cases: packed.cases,
-            ticks: packed.ticks,
+            ticks: Some(packed.ticks),
             words: packed.words,
+            output_width: 2,
             reset: vec![true, false],
             trace: values,
         };
@@ -344,6 +376,21 @@ mod tests {
                 assert_eq!(output.bits(case, tick), bits);
             }
         }
+    }
+
+    #[test]
+    #[ignore = "Vulkan GPU が必要"]
+    fn named_function_on_the_workbench_returns_one_output_per_case() {
+        let source = "(using nor) (func main (in a) (out q) (def q (nor a a)))";
+        let GpuBatchCircuit::Combinational(layout) =
+            circuitgame2_web::compile_gpu_batch_source(source).unwrap()
+        else {
+            panic!("func の組み合わせ配置を返す");
+        };
+        let output = evaluate_combinational(layout, "0\n1").unwrap();
+        assert!(output.ticks.is_none());
+        assert_eq!(output.bits(0, 0), "1");
+        assert_eq!(output.bits(1, 0), "0");
     }
 
     #[test]

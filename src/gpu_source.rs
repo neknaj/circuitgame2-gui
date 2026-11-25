@@ -1,13 +1,88 @@
-//! デスクトップ GPU 向けの順序 NOR 回路をソースから組み立てる。
+//! デスクトップ GPU 向けの組み合わせ回路と順序回路をソースから組み立てる。
 
 use std::ops::Range;
 
 use circuitgame2_core::{
-    netlist::ClockedNor,
-    project::{ClockedModuleError, LocatedName, SourceSnapshot},
+    netlist::{ClockedNor, PackedCombinationalLayout32},
+    project::{
+        CircuitProject, ClockedModuleError, ExpandFunctionsError, LocatedName, ModuleBodyPosition,
+        SourceSnapshot, UseAliases,
+    },
+    syntax::circuit::Head,
 };
 
-use crate::{CompileError, LIMITS, SourceLocation, entry_message, with_module_entry};
+use crate::diagnostic::{definition_reference_error, location, reported};
+use crate::{CompileError, LIMITS, entry_message, with_circuit_entry, with_module_entry};
+
+/// 開始宣言の意味論に対応する GPU の実行対象。
+pub enum GpuBatchCircuit {
+    /// 各入力を独立に評価し、公開出力を得る。
+    Combinational(PackedCombinationalLayout32),
+    /// 指定した入力列で tick を進め、各時点の公開出力を得る。
+    Clocked(ClockedNor),
+}
+
+/// 単独ソースの `::main` を、宣言種別に対応する GPU の実行対象に変換する。
+///
+/// # Errors
+///
+/// ソース、開始宣言、配線、型、資源上限を検査できない場合にエラーを返す。
+pub fn compile_gpu_batch_source(source: &str) -> Result<GpuBatchCircuit, CompileError> {
+    let snapshots = [SourceSnapshot {
+        path: "main.ncg2",
+        revision: 1,
+        text: source,
+    }];
+    compile_gpu_batch_snapshots(&snapshots, "::main", None)
+}
+
+pub(crate) fn compile_gpu_batch_snapshots(
+    snapshots: &[SourceSnapshot<'_>],
+    name: &str,
+    name_span: Option<Range<usize>>,
+) -> Result<GpuBatchCircuit, CompileError> {
+    with_circuit_entry(
+        snapshots,
+        name,
+        &name_span,
+        "開始回路",
+        |project, aliases, position, head| {
+            let unavailable = || entry_message(&name_span, format!("{name} を実行できない。"));
+            match head {
+                Head::Module => Ok(GpuBatchCircuit::Clocked(
+                    lower_clocked(aliases, position, name)?.ok_or_else(unavailable)?,
+                )),
+                Head::Func => {
+                    let circuit = aliases
+                        .expand_reachable_function(
+                            (position.file, position.entry),
+                            LIMITS.width,
+                            LIMITS.wiring_bits,
+                            LIMITS.gates,
+                        )
+                        .map_err(|error| function_error(project, error))?
+                        .ok_or_else(unavailable)?;
+                    let layout =
+                        circuit
+                            .netlist()
+                            .packed_combinational_layout32()
+                            .map_err(|error| {
+                                entry_message(
+                                    &name_span,
+                                    format!("{name} の配線を検査できない。{error:?}"),
+                                )
+                            })?;
+                    Ok(GpuBatchCircuit::Combinational(layout))
+                }
+                _ => Err(entry_message(
+                    &name_span,
+                    format!("{name} は func または module を指す必要がある。"),
+                )
+                .into()),
+            }
+        },
+    )
+}
 
 /// UTF-8 の単独ソースから開始モジュール `::main` を順序 NOR 回路に変換する。
 ///
@@ -30,37 +105,19 @@ pub(crate) fn compile_gpu_snapshots(
     name_span: Option<Range<usize>>,
 ) -> Result<ClockedNor, CompileError> {
     with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
-        aliases
-            .lower_clocked_module_with_limits(
-                position,
-                LIMITS.width,
-                LIMITS.wiring_bits,
-                LIMITS.gates,
-            )
-            .map_err(|error| clocked_error(name, error))?
+        lower_clocked(aliases, position, name)?
             .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")).into())
     })
 }
 
-// Core の位置を所有し、ワーカー終了後も同じスナップショットの範囲を使えるようにする。
-fn location(site: &LocatedName<'_, '_>) -> SourceLocation {
-    SourceLocation {
-        path: site.source.id.components().join("/"),
-        revision: site.source.revision,
-        span: site.span.clone(),
-    }
-}
-
-fn reported(
-    site: &LocatedName<'_, '_>,
-    related: impl IntoIterator<Item = SourceLocation>,
-    message: impl Into<String>,
-) -> CompileError {
-    CompileError::Source {
-        primary: location(site),
-        related: related.into_iter().collect(),
-        message: message.into(),
-    }
+fn lower_clocked(
+    aliases: &UseAliases<'_, '_, '_>,
+    position: ModuleBodyPosition,
+    name: &str,
+) -> Result<Option<ClockedNor>, CompileError> {
+    aliases
+        .lower_clocked_module_with_limits(position, LIMITS.width, LIMITS.wiring_bits, LIMITS.gates)
+        .map_err(|error| clocked_error(name, error))
 }
 
 fn chain<'s, 'p: 's, 'a: 'p>(
@@ -71,6 +128,158 @@ fn chain<'s, 'p: 's, 'a: 'p>(
     match sites.next() {
         Some(first) => reported(first, sites.map(location), message),
         None => message.to_owned().into(),
+    }
+}
+
+fn function_error(
+    project: &CircuitProject<'_>,
+    error: ExpandFunctionsError<'_, '_>,
+) -> CompileError {
+    use circuitgame2_core::project::{
+        BitFuncError, FunctionBuildDiagnostic, FunctionExpansionError,
+    };
+
+    match error {
+        ExpandFunctionsError::Plan(FunctionExpansionError::Reference(error)) => {
+            definition_reference_error(error.site, error.reason)
+        }
+        ExpandFunctionsError::Plan(FunctionExpansionError::Cycle(sites)) => chain(
+            sites.iter().map(|edge| &edge.location),
+            "関数の呼び出しが循環している。",
+        ),
+        ExpandFunctionsError::Function {
+            position,
+            diagnostic,
+        } => {
+            let at_function = |message: &str| {
+                let declaration = project.circuits().get(position.0).and_then(|file| {
+                    let form = file.syntax.entries.get(position.1)?.form;
+                    file.names.iter().find(|name| name.form == form)
+                });
+                match (project.sources().get(position.0), declaration) {
+                    (Some(source), Some(declaration)) => reported(
+                        &LocatedName {
+                            source,
+                            span: declaration.name.span.clone(),
+                        },
+                        [],
+                        message,
+                    ),
+                    _ => message.to_owned().into(),
+                }
+            };
+            let (error, message) = match diagnostic {
+                FunctionBuildDiagnostic::Prepare(error) => {
+                    (error, "関数の型や結線を検査できない。")
+                }
+                FunctionBuildDiagnostic::Ports(error) => {
+                    (error, "ポートの型や配置を検査できない。")
+                }
+                FunctionBuildDiagnostic::Definition(error) => {
+                    (error, "定義を NOR 回路に変換できない。")
+                }
+                FunctionBuildDiagnostic::Output(error) => (error, "出力の型や幅を検査できない。"),
+                FunctionBuildDiagnostic::Layout(_) => {
+                    return at_function("入出力や定義のビット範囲を割り当てられない。");
+                }
+                FunctionBuildDiagnostic::Argument(site) => {
+                    return reported(&site, [], "引数の配線を確定できない。");
+                }
+                FunctionBuildDiagnostic::LocalGateCapacity(site)
+                | FunctionBuildDiagnostic::CallGateCapacity(site) => {
+                    return reported(&site, [], "ゲート数の上限を超えた。");
+                }
+                FunctionBuildDiagnostic::CallOutputCapacity {
+                    site,
+                    used,
+                    width,
+                    capacity,
+                } => {
+                    return reported(
+                        &site,
+                        [],
+                        format!(
+                            "使用中の配線 {used} 本に {width} 本を追加すると、上限 {capacity} 本を超える。"
+                        ),
+                    );
+                }
+            };
+            match error {
+                BitFuncError::NeedsExpansion(site) => {
+                    reported(&site, [], "この呼び出しを展開できない。")
+                }
+                BitFuncError::Unsupported(_, site) => {
+                    reported(&site, [], "この式や型を NOR 回路へ変換できない。")
+                }
+                BitFuncError::NorInputWidth { argument, actual } => reported(
+                    &argument,
+                    [],
+                    format!("基底 NOR の入力には 1 ビットが必要だが、幅は {actual} ビット。"),
+                ),
+                BitFuncError::OutputWidth {
+                    annotation,
+                    expected,
+                    actual,
+                } => reported(
+                    &annotation,
+                    [],
+                    format!("出力宣言の幅 {expected} ビットと駆動元の幅 {actual} ビットが異なる。"),
+                ),
+                BitFuncError::Selection(error) => selection_error(error),
+                BitFuncError::Check(error) => {
+                    function_type_error(error).unwrap_or_else(|| at_function(message))
+                }
+                _ => at_function(message),
+            }
+        }
+    }
+}
+
+fn selection_error(
+    error: circuitgame2_core::project::SelectionArgumentError<'_, '_>,
+) -> CompileError {
+    use circuitgame2_core::project::SelectionArgumentError;
+
+    match error {
+        SelectionArgumentError::NaturalOverflow { site, .. } => {
+            reported(&site, [], "選択引数が自然数の上限を超えた。")
+        }
+        SelectionArgumentError::ZeroCount { site } => {
+            reported(&site, [], "選択するビット数には正の値を指定する。")
+        }
+        SelectionArgumentError::ZeroStride { site } => {
+            reported(&site, [], "ビット選択の刻みには正の値を指定する。")
+        }
+        SelectionArgumentError::Outside {
+            site,
+            width_origin,
+            last,
+            input_width,
+            ..
+        } => reported(
+            &site,
+            [location(&width_origin)],
+            format!("ビット位置 {last} は入力幅 {input_width} ビットの範囲を超える。"),
+        ),
+    }
+}
+
+fn function_type_error(
+    error: circuitgame2_core::project::FuncSignalTypeError<'_, '_>,
+) -> Option<CompileError> {
+    use circuitgame2_core::project::FuncSignalTypeError;
+    match error {
+        FuncSignalTypeError::SelectionArgument(error) => Some(selection_error(error)),
+        FuncSignalTypeError::SelectionInputType { reference, actual }
+        | FuncSignalTypeError::ConcatInputType { reference, actual } => Some(reported(
+            &reference,
+            [location(&actual.origin)],
+            "引数にはビット列型が必要。",
+        )),
+        FuncSignalTypeError::ConcatWidth { expression, .. } => {
+            Some(reported(&expression, [], "連接結果の幅が上限を超えた。"))
+        }
+        _ => None,
     }
 }
 
@@ -188,6 +397,30 @@ fn clocked_error(name: &str, error: ClockedModuleError<'_, '_>) -> CompileError 
 mod tests {
 
     use crate::ProjectSettings;
+
+    #[test]
+    fn a_function_cycle_reports_each_call_without_dumping_the_source() {
+        let config = ProjectSettings::new(b"sources = ['left.ncg2', 'right.ncg2']").unwrap();
+        let left = "(using nor) (func main (in x) (out q) (def q (::other x)))";
+        let right = "(func other (in x) (out q) (def q (::main x)))";
+        let error = config
+            .compile_gpu_batch_texts(&[left.into(), right.into()])
+            .err()
+            .unwrap();
+
+        let (path, span) = error.source_location().unwrap();
+        let related = error.related_source_locations();
+        assert_eq!(related.len(), 1);
+        let ranges = match path {
+            "left.ncg2" => [left.get(span.clone()), right.get(related[0].span.clone())],
+            "right.ncg2" => [right.get(span.clone()), left.get(related[0].span.clone())],
+            _ => panic!("unexpected path {path}"),
+        };
+        assert!(ranges.contains(&Some("::main")));
+        assert!(ranges.contains(&Some("::other")));
+        assert_ne!(path, related[0].path);
+        assert!(!error.to_string().contains("(using nor)"));
+    }
 
     #[test]
     fn a_project_uses_the_configured_entry_and_source_order() {
