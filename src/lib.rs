@@ -19,7 +19,7 @@ pub use circuitgame2_project_config::FILE_NAME as PROJECT_CONFIG_FILE_NAME;
 pub use config::{ProjectSettings, decode_utf8};
 pub use diagnostic::{CompileError, SourceLocation};
 #[cfg(not(target_arch = "wasm32"))]
-pub use gpu_source::compile_gpu_source;
+pub use gpu_source::{GpuBatchCircuit, compile_gpu_batch_source, compile_gpu_source};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -201,6 +201,20 @@ fn with_module_entry<T>(
     name_span: Option<Range<usize>>,
     compile: impl FnOnce(&UseAliases<'_, '_, '_>, ModuleBodyPosition) -> Result<T, CompileError>,
 ) -> Result<T, CompileError> {
+    with_circuit_entry(snapshots, name, &name_span, |aliases, position, head| {
+        if head != Head::Module {
+            return Err(entry_message(&name_span, format!("{name} は module を指す必要がある。")).into());
+        }
+        compile(aliases, position)
+    })
+}
+
+fn with_circuit_entry<T>(
+    snapshots: &[SourceSnapshot<'_>],
+    name: &str,
+    name_span: &Option<Range<usize>>,
+    compile: impl FnOnce(&UseAliases<'_, '_, '_>, ModuleBodyPosition, Head) -> Result<T, CompileError>,
+) -> Result<T, CompileError> {
     let project = parse_circuit_project(snapshots).map_err(|error| match error {
         CircuitProjectError::Syntax { id, error, .. } => CompileError::Syntax {
             path: id.components().join("/"),
@@ -216,14 +230,14 @@ fn with_module_entry<T>(
             format!("定義内の参照を解決できない。 {error:?}")
         }
     })?;
-    let at_entry = |message: String| entry_message(&name_span, message);
+    let at_entry = |message: String| entry_message(name_span, message);
     let qualified = name
         .strip_prefix("::")
         .filter(|path| {
             path.split("::")
                 .all(|part| !part.is_empty() && !part.contains(':'))
         })
-        .ok_or_else(|| at_entry("開始モジュールを完全修飾名で指定する。".into()))?;
+        .ok_or_else(|| at_entry("開始回路を完全修飾名で指定する。".into()))?;
     let (parent, unqualified) = qualified
         .rsplit_once("::")
         .map_or((None, qualified), |(parent, tail)| (Some(parent), tail));
@@ -237,9 +251,6 @@ fn with_module_entry<T>(
         .declarations()
         .declaration(key)
         .ok_or_else(|| at_entry(format!("{name} の宣言がない。")))?;
-    if declaration.head != Head::Module {
-        return Err(at_entry(format!("{name} は module を指す必要がある。")).into());
-    }
     let file = project
         .sources()
         .iter()
@@ -257,7 +268,7 @@ fn with_module_entry<T>(
         })
         .ok_or_else(|| at_entry(format!("{name} の宣言位置が見つからない。")))?;
     let position = ModuleBodyPosition { file, entry };
-    compile(analysis.aliases(), position)
+    compile(analysis.aliases(), position, declaration.head)
 }
 
 /// 設定側の主範囲に加え、読み出し信号が指した定義の範囲を示す。

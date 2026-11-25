@@ -1,13 +1,59 @@
-//! デスクトップ GPU 向けの順序 NOR 回路をソースから組み立てる。
+//! デスクトップ GPU 向けの組み合わせ回路と順序回路をソースから組み立てる。
 
 use std::ops::Range;
 
 use circuitgame2_core::{
-    netlist::ClockedNor,
-    project::{ClockedModuleError, LocatedName, SourceSnapshot},
+    netlist::{ClockedNor, PackedCombinationalLayout32},
+    project::{ClockedModuleError, LocatedName, ModuleBodyPosition, SourceSnapshot, UseAliases},
+    syntax::circuit::Head,
 };
 
-use crate::{CompileError, LIMITS, SourceLocation, entry_message, with_module_entry};
+use crate::{CompileError, LIMITS, SourceLocation, entry_message, with_circuit_entry, with_module_entry};
+
+/// 開始宣言の意味論に対応する GPU の実行対象。
+pub enum GpuBatchCircuit {
+    /// 各入力を独立に評価し、公開出力を得る。
+    Combinational(PackedCombinationalLayout32),
+    /// 指定した入力列で tick を進め、各時点の公開出力を得る。
+    Clocked(ClockedNor),
+}
+
+/// 単独ソースの `::main` を、宣言種別に対応する GPU の実行対象に変換する。
+///
+/// # Errors
+///
+/// ソース、開始宣言、配線、型、資源上限を検査できない場合にエラーを返す。
+pub fn compile_gpu_batch_source(source: &str) -> Result<GpuBatchCircuit, CompileError> {
+    let snapshots = [SourceSnapshot { path: "main.ncg2", revision: 1, text: source }];
+    compile_gpu_batch_snapshots(&snapshots, "::main", None)
+}
+
+pub(crate) fn compile_gpu_batch_snapshots(
+    snapshots: &[SourceSnapshot<'_>],
+    name: &str,
+    name_span: Option<Range<usize>>,
+) -> Result<GpuBatchCircuit, CompileError> {
+    with_circuit_entry(snapshots, name, &name_span, |aliases, position, head| {
+        let unavailable = || entry_message(&name_span, format!("{name} を実行できない。"));
+        match head {
+            Head::Module => Ok(GpuBatchCircuit::Clocked(
+                lower_clocked(aliases, position, name)?.ok_or_else(unavailable)?,
+            )),
+            Head::Func => {
+                let circuit = aliases
+                    .expand_reachable_function(
+                        (position.file, position.entry), LIMITS.width, LIMITS.wiring_bits, LIMITS.gates,
+                    )
+                    .map_err(|error| entry_message(&name_span, format!("{name} の関数を展開できない。{error:?}")))?
+                    .ok_or_else(unavailable)?;
+                let layout = circuit.netlist().packed_combinational_layout32()
+                    .map_err(|error| entry_message(&name_span, format!("{name} の配線を検査できない。{error:?}")))?;
+                Ok(GpuBatchCircuit::Combinational(layout))
+            }
+            _ => Err(entry_message(&name_span, format!("{name} は func または module を指す必要がある。")).into()),
+        }
+    })
+}
 
 /// UTF-8 の単独ソースから開始モジュール `::main` を順序 NOR 回路に変換する。
 ///
@@ -30,16 +76,16 @@ pub(crate) fn compile_gpu_snapshots(
     name_span: Option<Range<usize>>,
 ) -> Result<ClockedNor, CompileError> {
     with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
-        aliases
-            .lower_clocked_module_with_limits(
-                position,
-                LIMITS.width,
-                LIMITS.wiring_bits,
-                LIMITS.gates,
-            )
-            .map_err(|error| clocked_error(name, error))?
+        lower_clocked(aliases, position, name)?
             .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")).into())
     })
+}
+
+fn lower_clocked(
+    aliases: &UseAliases<'_, '_, '_>, position: ModuleBodyPosition, name: &str,
+) -> Result<Option<ClockedNor>, CompileError> {
+    aliases.lower_clocked_module_with_limits(position, LIMITS.width, LIMITS.wiring_bits, LIMITS.gates)
+        .map_err(|error| clocked_error(name, error))
 }
 
 // Core の位置を所有し、ワーカー終了後も同じスナップショットの範囲を使えるようにする。

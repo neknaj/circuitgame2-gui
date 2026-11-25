@@ -358,10 +358,10 @@ impl eframe::App for Workbench {
                         self.gpu_batch
                             .start(ui.ctx().clone(), move || match sources {
                                 Sources::Single(source) => {
-                                    circuitgame2_web::compile_gpu_source(&source)
+                                    circuitgame2_web::compile_gpu_batch_source(&source)
                                 }
                                 Sources::Project(project) => {
-                                    project.settings.compile_gpu_texts(&project.texts)
+                                    project.settings.compile_gpu_batch_texts(&project.texts)
                                 }
                             });
                     }
