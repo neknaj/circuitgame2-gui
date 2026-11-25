@@ -564,6 +564,7 @@ dependencies = [
  "eframe",
  "js-sys",
  "rfd",
+ "tempfile",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
