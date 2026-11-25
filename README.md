@@ -38,3 +38,23 @@ CLI リポジトリの `examples/vram` を開くと、公開 VRAM の `screen` �
 外部デバイスと NCG2M の実行は未対応。
 
 [NCG2 の仕様と実装計画](https://neknaj.github.io/circuitgame2/docs/)
+
+## 共通 GUI の試作
+
+`circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチ、リセット、1 tick 実行を試せる。
+
+ネイティブで起動する。
+
+```sh
+cargo run --locked -p circuitgame2-gui
+```
+
+ブラウザーで試すには、先に上の手順で `wasm-bindgen` を用意し、次のコマンドを実行して [localhost:8000](http://localhost:8000/) を開く。
+
+```sh
+cargo build --locked -p circuitgame2-gui --lib --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unknown/debug/circuitgame2_gui.wasm
+python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
+```
+
+この試作では、`::main` を含む単独の回路ソースを編集できる。フォルダーの取り込みと VRAM の閲覧は、上で説明したブラウザー版から使える。ブラウザーで日本語のコメントや診断を表示するには、日本語フォントの追加が必要。IME 入力は検証中。

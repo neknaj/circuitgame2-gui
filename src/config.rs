@@ -9,6 +9,7 @@ use std::{
 use circuitgame2_core::project::{SourceKind, SourceSnapshot, normalize_path};
 use serde::Deserialize;
 use toml::{Spanned, Table};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 use crate::Simulation;
@@ -66,7 +67,7 @@ pub(crate) fn at(span: Option<Range<usize>>, reason: &str) -> String {
 }
 
 /// 設定ディレクトリを基準にしたソース一覧と開始モジュール。
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct ProjectSettings {
     paths: Vec<(String, Range<usize>)>,
     path_failure: Option<String>,
@@ -74,14 +75,14 @@ pub struct ProjectSettings {
     vram: Vec<Vram>,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl ProjectSettings {
     /// TOML を読み、ソース指定を Core の仮想パスに正規化する。
     ///
     /// # Errors
     ///
     /// UTF-8 や設定の構文・項目が不正な場合、または外部デバイスを指定した場合に失敗する。
-    #[wasm_bindgen(constructor)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(bytes: &[u8]) -> Result<ProjectSettings, String> {
         let text = decode_utf8(SETTINGS, bytes)?;
         let config: Settings = toml::from_str(&text).map_err(|error| {
@@ -197,7 +198,7 @@ fn source_path(value: &Spanned<String>) -> Result<String, String> {
 /// # Errors
 ///
 /// UTF-8 に変換できないバイト列を受け取った場合にエラーを返す。
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn decode_utf8(path: &str, bytes: &[u8]) -> Result<String, String> {
     let text = std::str::from_utf8(bytes).map_err(|error| {
         let start = error.valid_up_to();

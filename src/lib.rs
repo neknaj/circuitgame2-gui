@@ -1,4 +1,4 @@
-//! ブラウザーとの入出力を変換し、Core の順序回路 VM を実行する。
+//! Core の順序回路 VM を実行し、WASM ではブラウザから呼べる形にする。
 
 mod config;
 
@@ -13,6 +13,7 @@ use circuitgame2_core::{
     syntax::circuit::{CircuitFormError, Head},
 };
 pub use config::{ProjectSettings, decode_utf8};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 // CLI の例題と同じ範囲で回路を実行する。
@@ -24,20 +25,20 @@ const LIMITS: ClockedModuleVmLimits = ClockedModuleVmLimits {
 };
 
 /// ブラウザーでリセットと tick 操作を行える順序回路。
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct Simulation {
     compiled: ClockedModuleVm,
     vram: Vec<(String, usize)>,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl Simulation {
     /// UTF-8 の単独ソースから、ルートモジュール `::main` をコンパイルする。
     ///
     /// # Errors
     ///
     /// ソースの構文や宣言、配線、型、資源上限に問題がある場合はエラーを返す。
-    #[wasm_bindgen(constructor)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(source: &str) -> Result<Simulation, String> {
         let snapshots = [SourceSnapshot {
             path: "main.ncg2",
