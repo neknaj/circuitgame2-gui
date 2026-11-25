@@ -57,7 +57,7 @@ wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unk
 python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 ```
 
-`circuitgame2.toml` を使う場合は、画面の「Open project folder」で設定ファイルがあるフォルダーを選ぶ。「Project source」で編集するファイルを切り替え、「Load circuit」で全ファイルの編集を反映する。編集中の内容は、そのプロジェクトを開いている間、メモリーに保持する。CLI リポジトリの [`examples/project`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/project) で試せる。VRAM を閲覧するには、上で説明したブラウザー版を使う。
+`circuitgame2.toml` を使う場合は、画面の「Open project folder」で設定ファイルがあるフォルダーを選ぶ。「Project source」で編集するファイルを切り替え、「Load circuit」で全ファイルの編集を反映する。構文エラーが出たときは「Go to error」で該当箇所を選択できる。編集中の内容は、そのプロジェクトを開いている間、メモリーに保持する。CLI リポジトリの [`examples/project`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/project) で試せる。VRAM を閲覧するには、上で説明したブラウザー版を使う。
 
 ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
 

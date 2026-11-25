@@ -1,6 +1,6 @@
 //! 編集できるプロジェクトの本文を、設定のソース順で保持する。
 
-use circuitgame2_web::{ProjectSettings, Simulation};
+use circuitgame2_web::{CompileError, ProjectSettings, Simulation};
 
 pub(crate) const MANIFEST: &str = "circuitgame2.toml";
 
@@ -11,7 +11,7 @@ pub(crate) struct Project {
 }
 
 impl Project {
-    pub(crate) fn compile(&self) -> Result<Simulation, String> {
+    pub(crate) fn compile(&self) -> Result<Simulation, CompileError> {
         self.settings.compile_texts(&self.texts)
     }
 }

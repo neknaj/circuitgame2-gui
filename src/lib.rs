@@ -1,18 +1,20 @@
 //! Core の順序回路 VM を実行し、WASM ではブラウザから呼べる形にする。
 
 mod config;
+mod diagnostic;
 
 use std::{collections::BTreeSet, ops::Range};
 
 use circuitgame2_core::{
     project::{
-        CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits, ModuleBodyPosition, NameKey,
-        SourceSnapshot, VramDeclaration, VramOutputError, VramSetupError, analyze_definitions,
-        check_use_aliases, parse_circuit_project,
+        CircuitProject, CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits,
+        ModuleBodyPosition, NameKey, SourceSnapshot, VramDeclaration, VramOutputError,
+        VramSetupError, analyze_definitions, check_use_aliases, parse_circuit_project,
     },
-    syntax::circuit::{CircuitFormError, Head},
+    syntax::circuit::Head,
 };
 pub use config::{ProjectSettings, decode_utf8};
+pub use diagnostic::CompileError;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -40,12 +42,7 @@ impl Simulation {
     /// ソースの構文や宣言、配線、型、資源上限に問題がある場合はエラーを返す。
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(source: &str) -> Result<Simulation, String> {
-        let snapshots = [SourceSnapshot {
-            path: "main.ncg2",
-            revision: 1,
-            text: source,
-        }];
-        Self::from_snapshots(&snapshots, "::main", None, &[])
+        Self::compile(source).map_err(|error| error.to_string())
     }
 
     /// tick ごとに渡す入力のビット数を返す。
@@ -111,20 +108,49 @@ impl Simulation {
 }
 
 impl Simulation {
+    /// UTF-8 の単独ソースから `::main` をコンパイルし、構文診断の位置を保持する。
+    ///
+    /// # Errors
+    ///
+    /// ソースの構文や宣言、配線、型、資源上限に問題がある場合にエラーを返す。
+    pub fn compile(source: &str) -> Result<Self, CompileError> {
+        let snapshots = [SourceSnapshot {
+            path: "main.ncg2",
+            revision: 1,
+            text: source,
+        }];
+        Self::from_snapshots(&snapshots, "::main", None, &[])
+    }
+
     fn vram_memory(&self, name: &str) -> Option<&[bool]> {
         let (_, index) = self.vram.iter().find(|(candidate, _)| candidate == name)?;
         self.compiled.vm.ram_memory(*index)
     }
 
-    /// 解析済みの宣言が指すファイルとフォームを使って VM を構築する。
     fn from_snapshots(
         snapshots: &[SourceSnapshot<'_>],
         name: &str,
         name_span: Option<Range<usize>>,
         vram: &[config::Vram],
+    ) -> Result<Self, CompileError> {
+        let project = parse_circuit_project(snapshots).map_err(|error| match error {
+            CircuitProjectError::Syntax { id, error, .. } => CompileError::Syntax {
+                path: id.components().join("/"),
+                error,
+            },
+            other => CompileError::Message(format!("ソースを読み込めない ({other:?})。")),
+        })?;
+        Self::from_project(&project, name, name_span, vram).map_err(CompileError::from)
+    }
+
+    /// 解析済みの宣言が指すファイルとフォームを使って VM を構築する。
+    fn from_project(
+        project: &CircuitProject<'_>,
+        name: &str,
+        name_span: Option<Range<usize>>,
+        vram: &[config::Vram],
     ) -> Result<Self, String> {
-        let project = parse_circuit_project(snapshots).map_err(source_error)?;
-        let analysis = analyze_definitions(&project)
+        let analysis = analyze_definitions(project)
             .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
         let at_entry = |message: String| match &name_span {
             Some(span) => config::at(Some(span.clone()), &message),
@@ -228,34 +254,6 @@ fn vram_error(error: VramOutputError<'_, '_>) -> String {
             site.span.end
         ),
         VramOutputError::Module(_) => "VRAM の対象モジュールを検査できない。".into(),
-    }
-}
-
-/// 構文エラーの位置は元ソースの UTF-8 半開バイト範囲で示す。
-fn source_error(error: CircuitProjectError<'_>) -> String {
-    match error {
-        CircuitProjectError::Syntax {
-            id,
-            error: CircuitFormError::Syntax(error),
-            ..
-        } => format!(
-            "{} [{}..{}] 構文エラー ({:?})。",
-            id.components().join("/"),
-            error.span.start,
-            error.span.end,
-            error.kind
-        ),
-        CircuitProjectError::Syntax {
-            id,
-            error: CircuitFormError::Header { kind, span },
-            ..
-        } => format!(
-            "{} [{}..{}] 回路フォームの構文エラー ({kind:?})。",
-            id.components().join("/"),
-            span.start,
-            span.end
-        ),
-        other => format!("ソースを読み込めない ({other:?})。"),
     }
 }
 

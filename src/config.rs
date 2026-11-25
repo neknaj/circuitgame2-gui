@@ -12,7 +12,7 @@ use toml::{Spanned, Table};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-use crate::Simulation;
+use crate::{CompileError, Simulation};
 
 const SETTINGS: &str = "circuitgame2.toml";
 
@@ -148,6 +148,7 @@ impl ProjectSettings {
     /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
     pub fn compile(&self, texts: Vec<String>) -> Result<Simulation, String> {
         self.compile_texts(&texts)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -157,13 +158,13 @@ impl ProjectSettings {
     /// # Errors
     ///
     /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
-    pub fn compile_texts(&self, texts: &[String]) -> Result<Simulation, String> {
+    pub fn compile_texts(&self, texts: &[String]) -> Result<Simulation, CompileError> {
         if texts.len() != self.paths.len() {
-            return Err(at(None, "sources に対応する本文の件数が一致しない。"));
+            return Err(at(None, "sources に対応する本文の件数が一致しない。").into());
         }
         // 先に指定したファイルの取得に失敗した場合は、ブラウザーがその診断を先に出す。
         if let Some(error) = &self.path_failure {
-            return Err(error.clone());
+            return Err(error.clone().into());
         }
         let snapshots: Vec<_> = self
             .paths
