@@ -13,6 +13,7 @@ use circuitgame2_core::{
     },
     syntax::circuit::Head,
 };
+pub use circuitgame2_project_config::FILE_NAME as PROJECT_CONFIG_FILE_NAME;
 pub use config::{ProjectSettings, decode_utf8};
 pub use diagnostic::CompileError;
 #[cfg(target_arch = "wasm32")]

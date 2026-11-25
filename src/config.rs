@@ -1,62 +1,14 @@
 //! ブラウザーが選択したファイルから使う、実行設定とソースパス。
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    num::NonZeroU64,
-    ops::Range,
-};
+use std::{collections::BTreeSet, ops::Range};
 
 use circuitgame2_core::project::{SourceKind, SourceSnapshot, normalize_path};
-use serde::Deserialize;
-use toml::{Spanned, Table};
+pub(crate) use circuitgame2_project_config::Vram;
+use circuitgame2_project_config::{ConfigError, FILE_NAME as SETTINGS, Spanned, parse};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 use crate::{CompileError, Simulation};
-
-const SETTINGS: &str = "circuitgame2.toml";
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-struct Settings {
-    sources: Spanned<Vec<Spanned<String>>>,
-    entry: Option<Spanned<String>>,
-    #[serde(rename = "tick-ns")]
-    _tick_ns: Option<TickPeriod>,
-    #[serde(default)]
-    device: Vec<Spanned<Device>>,
-    #[serde(default)]
-    vram: Vec<Vram>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TickPeriod {
-    #[serde(rename = "numerator")]
-    _numerator: NonZeroU64,
-    #[serde(rename = "denominator")]
-    _denominator: NonZeroU64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Device {
-    #[serde(rename = "name")]
-    _name: String,
-    #[serde(rename = "kind")]
-    _kind: String,
-    #[serde(rename = "bindings")]
-    _bindings: BTreeMap<String, String>,
-    #[serde(rename = "options")]
-    _options: Option<Table>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub(crate) struct Vram {
-    pub(crate) name: String,
-    pub(crate) read_output: Spanned<String>,
-}
 
 /// 設定ファイルの UTF-8 半開バイト範囲をエラーメッセージに付ける。
 pub(crate) fn at(span: Option<Range<usize>>, reason: &str) -> String {
@@ -84,19 +36,15 @@ impl ProjectSettings {
     /// UTF-8 や設定の構文・項目が不正な場合、または外部デバイスを指定した場合に失敗する。
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(bytes: &[u8]) -> Result<ProjectSettings, String> {
-        let text = decode_utf8(SETTINGS, bytes)?;
-        let config: Settings = toml::from_str(&text).map_err(|error| {
-            at(
-                error.span(),
-                &format!("設定を解釈できない。{}", error.message()),
-            )
+        let config = parse(bytes).map_err(|error| match error {
+            ConfigError::InvalidUtf8(span) => at(Some(span), "不正な UTF-8 が含まれる。"),
+            ConfigError::InvalidToml { span, reason } => {
+                at(span, &format!("設定を解釈できない。{reason}"))
+            }
+            ConfigError::EmptySources(span) => {
+                at(Some(span), "sources にソースを1件以上指定する。")
+            }
         })?;
-        if config.sources.get_ref().is_empty() {
-            return Err(at(
-                Some(config.sources.span()),
-                "sources にソースを1件以上指定する。",
-            ));
-        }
         if let Some(device) = config.device.first() {
             return Err(at(
                 Some(device.span()),
