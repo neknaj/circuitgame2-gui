@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, ops::Range};
 
-use circuitgame2_core::syntax::circuit::CircuitFormError;
+use circuitgame2_core::{project::LocatedName, syntax::circuit::CircuitFormError};
 
 /// コンパイルで検査したソース上の位置。
 #[derive(Debug)]
@@ -134,4 +134,65 @@ mod tests {
         );
         assert_eq!(Simulation::new(&source).err().unwrap(), single.to_string());
     }
+}
+
+// Core の位置を所有し、ワーカー終了後も同じスナップショットの範囲を使えるようにする。
+pub(crate) fn location(site: &LocatedName<'_, '_>) -> SourceLocation {
+    SourceLocation {
+        path: site.source.id.components().join("/"),
+        revision: site.source.revision,
+        span: site.span.clone(),
+    }
+}
+
+pub(crate) fn reported(
+    site: &LocatedName<'_, '_>,
+    related: impl IntoIterator<Item = SourceLocation>,
+    message: impl Into<String>,
+) -> CompileError {
+    CompileError::Source {
+        primary: location(site),
+        related: related.into_iter().collect(),
+        message: message.into(),
+    }
+}
+
+pub(crate) fn definition_reference_error(
+    site: circuitgame2_core::project::DefinitionReferenceSite<'_, '_>,
+    reason: circuitgame2_core::project::DefinitionReferenceReason<'_, '_>,
+) -> CompileError {
+    use circuitgame2_core::project::DefinitionReferenceReason;
+
+    let (message, related) = match reason {
+        DefinitionReferenceReason::Missing => ("参照先の宣言が見つからない。", None),
+        DefinitionReferenceReason::MissingPrefix => ("相対パスの先頭が見つからない。", None),
+        DefinitionReferenceReason::DeclarationPrefix { source, form } => (
+            "相対パスの先頭は名前空間を指す必要がある。",
+            Some(location(&LocatedName {
+                source,
+                span: form.name.span.clone(),
+            })),
+        ),
+        DefinitionReferenceReason::Private(site) => {
+            ("この宣言は公開されていない。", Some(location(&site)))
+        }
+        DefinitionReferenceReason::Namespace(site) => {
+            ("参照先が名前空間を指している。", Some(location(&site)))
+        }
+        DefinitionReferenceReason::WrongDeclaration { source, form } => (
+            "この位置では参照先の宣言種別を使えない。",
+            Some(location(&LocatedName {
+                source,
+                span: form.name.span.clone(),
+            })),
+        ),
+    };
+    reported(
+        &LocatedName {
+            source: site.source,
+            span: site.name.span,
+        },
+        related,
+        message,
+    )
 }

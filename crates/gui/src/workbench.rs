@@ -18,7 +18,10 @@ struct Playback {
 
 impl Default for Playback {
     fn default() -> Self {
-        Self { speed: 10, next_tick: None }
+        Self {
+            speed: 10,
+            next_tick: None,
+        }
     }
 }
 
@@ -53,6 +56,8 @@ pub struct Workbench {
     pending_jump: Option<(usize, Range<usize>)>,
     #[cfg(not(target_arch = "wasm32"))]
     gpu_batch: crate::gpu_batch::GpuBatch,
+    #[cfg(not(target_arch = "wasm32"))]
+    function_entry: bool,
 }
 
 #[derive(Clone)]
@@ -82,6 +87,8 @@ impl Default for Workbench {
             pending_jump: None,
             #[cfg(not(target_arch = "wasm32"))]
             gpu_batch: crate::gpu_batch::GpuBatch::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            function_entry: false,
         };
         app.load_source();
         app
@@ -137,7 +144,10 @@ impl Workbench {
                         self.error = None;
                         self.pending_jump = None;
                         #[cfg(not(target_arch = "wasm32"))]
-                        self.gpu_batch.invalidate();
+                        {
+                            self.gpu_batch.invalidate();
+                            self.function_entry = false;
+                        }
                     }
                     if let Some((file, span)) = self.pending_jump.take()
                         && file == self.selected
@@ -159,12 +169,30 @@ impl Workbench {
         self.simulation = None;
         self.error = None;
         self.pending_jump = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let result = {
+            self.function_entry = false;
+            match &self.sources {
+                Sources::Single(source) => Simulation::compile_workbench(source),
+                Sources::Project(project) => {
+                    project.settings.compile_workbench_texts(&project.texts)
+                }
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
         let result = match &self.sources {
             Sources::Single(source) => Simulation::compile(source),
             Sources::Project(project) => project.compile(),
-        };
+        }
+        .map(Some);
         match result {
-            Ok(mut vm) => {
+            Ok(None) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.function_entry = true;
+                }
+            }
+            Ok(Some(mut vm)) => {
                 let inputs = vec![false; vm.input_width()];
                 let outputs = vm.reset();
                 let vram = VramPanel::new(&vm);
@@ -332,7 +360,6 @@ impl eframe::App for Workbench {
             let mut playback_action = self.show_playback(ui);
             ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
-
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Open project folder…").clicked()
                     && let Some(folder) = rfd::FileDialog::new().set_parent(_frame).pick_folder()
@@ -352,6 +379,9 @@ impl eframe::App for Workbench {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    if self.function_entry {
+                        ui.label("Use GPU batch to evaluate this func.");
+                    }
                     self.gpu_batch.poll(ui.ctx());
                     if self.gpu_batch.show(ui) {
                         let sources = self.sources.clone();
@@ -458,9 +488,25 @@ fn selection_for_bytes(source: &str, bytes: Range<usize>) -> Option<CCursorRange
 mod tests {
     use super::{MAX_TICKS_PER_FRAME, Playback, selection_for_bytes};
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn workbench_opens_a_function_without_a_module_diagnostic() {
+        let mut workbench = super::Workbench::default();
+        let source = "(using nor) (func main (in x) (out q) (def q (nor x x)))";
+        workbench.sources = super::Sources::Single(source.into());
+        workbench.load_source();
+
+        assert!(workbench.function_entry);
+        assert!(workbench.simulation.is_none());
+        assert!(workbench.error.is_none());
+    }
+
     #[test]
     fn playback_limits_work_after_a_long_frame_and_does_not_replay_it_after_pause() {
-        let mut playback = Playback { speed: 4, next_tick: Some(1.0) };
+        let mut playback = Playback {
+            speed: 4,
+            next_tick: Some(1.0),
+        };
         assert_eq!(playback.due(0.75), 0);
         assert_eq!(playback.due(1.0), 1);
         assert_eq!(playback.due(1.50), 2);

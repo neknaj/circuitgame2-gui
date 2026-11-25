@@ -120,6 +120,31 @@ impl ProjectSettings {
         )
     }
 
+    /// デスクトップ画面で、設定の開始宣言が `module` なら順序回路を作る。
+    ///
+    /// `func` の場合は `None` を返す。設定の `entry` を省略した場合は `::main` を使う。
+    ///
+    /// # Errors
+    ///
+    /// ソース、開始宣言、モジュールの展開または VRAM 設定に問題がある場合に失敗する。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn compile_workbench_texts(
+        &self,
+        texts: &[String],
+    ) -> Result<Option<Simulation>, CompileError> {
+        let snapshots = self.snapshots(texts)?;
+        let entry = self
+            .entry
+            .as_ref()
+            .map_or("::main", |entry| entry.get_ref());
+        Simulation::workbench_from_snapshots(
+            &snapshots,
+            entry,
+            self.entry.as_ref().map(Spanned::span),
+            &self.vram,
+        )
+    }
+
     /// 設定とソースを使い、デスクトップ GPU 向けの順序 NOR 回路を組み立てる。
     ///
     /// # Errors
@@ -156,14 +181,26 @@ impl ProjectSettings {
     ///
     /// ソースと設定が一致しない場合、開始宣言を変換できない場合、または VRAM を設定した場合に失敗する。
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn compile_gpu_batch_texts(&self, texts: &[String]) -> Result<crate::GpuBatchCircuit, CompileError> {
+    pub fn compile_gpu_batch_texts(
+        &self,
+        texts: &[String],
+    ) -> Result<crate::GpuBatchCircuit, CompileError> {
         let snapshots = self.snapshots(texts)?;
         if let Some(vram) = self.vram.first() {
-            return Err(at(Some(vram.read_output.span()), "GPU バッチは VRAM に未対応。").into());
+            return Err(at(
+                Some(vram.read_output.span()),
+                "GPU バッチは VRAM に未対応。",
+            )
+            .into());
         }
-        let entry = self.entry.as_ref().map_or("::main", |entry| entry.get_ref());
+        let entry = self
+            .entry
+            .as_ref()
+            .map_or("::main", |entry| entry.get_ref());
         crate::gpu_source::compile_gpu_batch_snapshots(
-            &snapshots, entry, self.entry.as_ref().map(Spanned::span),
+            &snapshots,
+            entry,
+            self.entry.as_ref().map(Spanned::span),
         )
     }
 
