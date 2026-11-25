@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: gui-checks-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   native:
@@ -27,19 +27,39 @@ jobs:
       - run: cargo build --locked -p circuitgame2-gui --bin ncg2-gui
 
   wasm:
-    name: Browser builds and WASM bindings
+    name: Browser builds and Pages artifact
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build both browser entry points
+      - run: cargo install --locked wasm-bindgen-cli --version 0.2.129
+      - run: cargo build --locked --release --workspace --lib --target wasm32-unknown-unknown
+      - name: Generate bindings for the separate browser prototype
+        run: wasm-bindgen --target web --out-dir site/pkg target/wasm32-unknown-unknown/release/circuitgame2_web.wasm
+      - name: Assemble the site
         run: |
-          cargo build --locked --target wasm32-unknown-unknown
-          cargo build --locked --target wasm32-unknown-unknown -p circuitgame2-gui --lib
-      - name: Generate browser bindings
-        run: |
-          cargo install --locked wasm-bindgen-cli --version 0.2.129
-          wasm-bindgen --target web --out-dir site/pkg target/wasm32-unknown-unknown/debug/circuitgame2_web.wasm
-          wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unknown/debug/circuitgame2_gui.wasm
+          set -euo pipefail
+          mkdir -p _site/fonts
+          cp crates/gui/web/{index.html,start.js} _site/
+          cp crates/gui/web/fonts/OFL.txt _site/fonts/
+          wasm-bindgen --target web --out-dir _site/pkg target/wasm32-unknown-unknown/release/circuitgame2_gui.wasm
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [native, wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
