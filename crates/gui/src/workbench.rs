@@ -298,7 +298,7 @@ impl LoadedCircuit {
     }
 
     fn show_inputs(&mut self, ui: &mut egui::Ui) {
-        let per_row = (ui.available_width() / 88.0).clamp(1.0, 16.0) as usize;
+        let per_row = (ui.available_width() / 120.0).clamp(1.0, 16.0) as usize;
         let rows = self.inputs.len().div_ceil(per_row);
         let height = ui.spacing().interact_size.y;
         egui::ScrollArea::vertical()
@@ -309,8 +309,20 @@ impl LoadedCircuit {
                     let start = row * per_row;
                     let end = (start + per_row).min(self.inputs.len());
                     ui.horizontal(|ui| {
+                        let width = (ui.available_width()
+                            - ui.spacing().item_spacing.x * (per_row - 1) as f32)
+                            / per_row as f32;
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                         for index in start..end {
-                            ui.checkbox(&mut self.inputs[index], format!("Bit {}", index + 1));
+                            let name = self
+                                .vm
+                                .input_signal_name(index)
+                                .unwrap_or_else(|| format!("Bit {}", index + 1));
+                            ui.add_sized(
+                                [width, height],
+                                egui::Checkbox::new(&mut self.inputs[index], &name),
+                            )
+                            .on_hover_text(name);
                         }
                     });
                 }
@@ -428,8 +440,8 @@ impl eframe::App for Workbench {
                 ui.label(format!("Tick {}", circuit.tick));
                 ui.label("Outputs");
                 circuit.show_outputs(ui);
+                circuit.waveform.show(ui, circuit.tick, &circuit.vm);
                 circuit.vram.show(ui, &circuit.vm);
-                circuit.waveform.show(ui, circuit.tick);
             });
         });
     }

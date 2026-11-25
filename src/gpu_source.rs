@@ -104,10 +104,15 @@ pub(crate) fn compile_gpu_snapshots(
     name: &str,
     name_span: Option<Range<usize>>,
 ) -> Result<ClockedNor, CompileError> {
-    with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
-        lower_clocked(aliases, position, name)?
-            .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")).into())
-    })
+    with_module_entry(
+        snapshots,
+        name,
+        name_span.clone(),
+        |_, aliases, position| {
+            lower_clocked(aliases, position, name)?
+                .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")).into())
+        },
+    )
 }
 
 fn lower_clocked(
