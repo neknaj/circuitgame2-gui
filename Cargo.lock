@@ -574,10 +574,20 @@ dependencies = [
 [[package]]
 name = "circuitgame2-core"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba#d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=3fe06073688d58a279faf5185b258a4d1d29b7b6#3fe06073688d58a279faf5185b258a4d1d29b7b6"
 dependencies = [
+ "circuitgame2-device-timing",
  "circuitgame2-packed-nor",
  "circuitgame2-syntax",
+ "vstd",
+]
+
+[[package]]
+name = "circuitgame2-device-timing"
+version = "0.1.0"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=3fe06073688d58a279faf5185b258a4d1d29b7b6#3fe06073688d58a279faf5185b258a4d1d29b7b6"
+dependencies = [
+ "verus_builtin_macros",
  "vstd",
 ]
 
@@ -610,7 +620,7 @@ dependencies = [
 [[package]]
 name = "circuitgame2-packed-nor"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba#d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=3fe06073688d58a279faf5185b258a4d1d29b7b6#3fe06073688d58a279faf5185b258a4d1d29b7b6"
 dependencies = [
  "verus_builtin_macros",
  "vstd",
@@ -619,7 +629,7 @@ dependencies = [
 [[package]]
 name = "circuitgame2-project-config"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba#d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=3fe06073688d58a279faf5185b258a4d1d29b7b6#3fe06073688d58a279faf5185b258a4d1d29b7b6"
 dependencies = [
  "serde",
  "toml",
@@ -628,7 +638,7 @@ dependencies = [
 [[package]]
 name = "circuitgame2-syntax"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba#d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=3fe06073688d58a279faf5185b258a4d1d29b7b6#3fe06073688d58a279faf5185b258a4d1d29b7b6"
 dependencies = [
  "vstd",
 ]
