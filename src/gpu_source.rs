@@ -12,9 +12,7 @@ use circuitgame2_core::{
 };
 
 use crate::diagnostic::{definition_reference_error, location, reported};
-use crate::{
-    CompileError, LIMITS, SourceLocation, entry_message, with_circuit_entry, with_module_entry,
-};
+use crate::{CompileError, LIMITS, entry_message, with_circuit_entry, with_module_entry};
 
 /// 開始宣言の意味論に対応する GPU の実行対象。
 pub enum GpuBatchCircuit {
