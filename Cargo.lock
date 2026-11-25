@@ -550,7 +550,7 @@ dependencies = [
 [[package]]
 name = "circuitgame2-core"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=9736a48f4cc122f0c4f9389bf8c8fb32316fa2ac#9736a48f4cc122f0c4f9389bf8c8fb32316fa2ac"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=7738f9fdf74314d77a3871cbd7806e1859add342#7738f9fdf74314d77a3871cbd7806e1859add342"
 dependencies = [
  "circuitgame2-syntax",
  "vstd",
@@ -573,7 +573,7 @@ dependencies = [
 [[package]]
 name = "circuitgame2-syntax"
 version = "0.1.0"
-source = "git+https://github.com/neknaj/circuitgame2-core?rev=9736a48f4cc122f0c4f9389bf8c8fb32316fa2ac#9736a48f4cc122f0c4f9389bf8c8fb32316fa2ac"
+source = "git+https://github.com/neknaj/circuitgame2-core?rev=7738f9fdf74314d77a3871cbd7806e1859add342#7738f9fdf74314d77a3871cbd7806e1859add342"
 dependencies = [
  "vstd",
 ]
