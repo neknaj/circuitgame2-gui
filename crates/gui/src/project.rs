@@ -2,7 +2,7 @@
 
 use circuitgame2_web::{CompileError, ProjectSettings, Simulation};
 
-pub(crate) const MANIFEST: &str = "circuitgame2.toml";
+pub(crate) use circuitgame2_web::PROJECT_CONFIG_FILE_NAME as MANIFEST;
 
 pub(crate) struct Project {
     pub(crate) settings: ProjectSettings,

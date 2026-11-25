@@ -15,9 +15,8 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "7738f9fdf74314d77a3871cbd7806e1859add342" }
-serde = { version = "1", features = ["derive"] }
-toml = { version = "0.8.23", default-features = false, features = ["parse"] }
+circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "2dfb373ba3b28be0fdf3daa1771d4bd039f441c9" }
+circuitgame2-project-config = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "2dfb373ba3b28be0fdf3daa1771d4bd039f441c9" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"
