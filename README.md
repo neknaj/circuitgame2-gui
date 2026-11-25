@@ -35,6 +35,18 @@ python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 
 フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。
 
+## デスクトップ GPU の回路実行
+
+Rust から `circuitgame2-gpu` クレートに Core の検査済み配線を渡すと、同じ順序 NOR 回路を複数の入力列で並列に実行できる。Vulkan に対応した GPU が必要で、現在の GUI 画面は CPU で実行する。
+
+実機テストでは CPU 版と出力や最終状態を比較し、複数回の GPU 投入をまたぐ tick 順を確認する。
+
+```sh
+cargo test --locked -p circuitgame2-gpu -- --ignored
+```
+
+[GPU と RP マイコンの設計](https://neknaj.github.io/circuitgame2/docs/backends.html)
+
 ## 従来のブラウザー版をローカルで実行する
 
 Git、Rustup、Python 3 を用意する。このリポジトリで次のコマンドを実行し、ブラウザーで [localhost:8000](http://localhost:8000/) を開く。

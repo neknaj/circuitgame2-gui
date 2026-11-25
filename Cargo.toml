@@ -1,7 +1,10 @@
 [workspace]
-members = ["crates/gui"]
+members = ["crates/gui", "crates/gpu"]
 default-members = ["."]
 resolver = "3"
+
+[workspace.dependencies]
+circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba" }
 
 [package]
 name = "circuitgame2-web"
@@ -15,8 +18,8 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "2dfb373ba3b28be0fdf3daa1771d4bd039f441c9" }
-circuitgame2-project-config = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "2dfb373ba3b28be0fdf3daa1771d4bd039f441c9" }
+circuitgame2-core.workspace = true
+circuitgame2-project-config = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "d9a37eef1ec91701dfe372fe0fc0d6ebd5d98cba" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"
