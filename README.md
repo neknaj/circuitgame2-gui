@@ -1,4 +1,4 @@
-# circuitgame2-web
+# circuitgame2-gui
 
 NCG2 の順序回路をブラウザーで実行する。回路の解析と tick の実行には、CLI と同じ Rust の Core を使う。
 
