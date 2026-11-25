@@ -2,9 +2,13 @@
 use circuitgame2_core::netlist::{ClockedNor, NorGate, NorNetlist, Wire};
 use circuitgame2_gpu::{GpuNor32, GpuNorError};
 
+// 実機のテストは一度に一つだけ GPU デバイスを作成する。
+static GPU_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 #[ignore = "Vulkan GPU が必要"]
 fn native_gpu_matches_core_with_feedback_inputs_and_constants() {
+    let _device = GPU_TEST.lock().unwrap();
     let clocked = ClockedNor::check(NorNetlist {
         input_count: 1,
         gates: vec![
@@ -62,6 +66,7 @@ fn native_gpu_matches_core_with_feedback_inputs_and_constants() {
 #[test]
 #[ignore = "Vulkan GPU が必要"]
 fn submissions_preserve_tick_order_and_empty_buffers() {
+    let _device = GPU_TEST.lock().unwrap();
     let layout = ClockedNor::check(NorNetlist {
         input_count: 1,
         gates: Vec::new(),
@@ -99,6 +104,7 @@ fn submissions_preserve_tick_order_and_empty_buffers() {
 #[test]
 #[ignore = "Vulkan GPU が必要"]
 fn dispatches_multiple_workgroups_per_tick() {
+    let _device = GPU_TEST.lock().unwrap();
     const GATES: usize = 67;
     const WORDS: usize = 129;
     const TICKS: usize = 5;

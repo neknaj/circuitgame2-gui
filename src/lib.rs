@@ -2,20 +2,24 @@
 
 mod config;
 mod diagnostic;
+#[cfg(not(target_arch = "wasm32"))]
+mod gpu_source;
 
 use std::{collections::BTreeSet, ops::Range};
 
 use circuitgame2_core::{
     project::{
-        CircuitProject, CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits,
-        ModuleBodyPosition, NameKey, SourceSnapshot, VramDeclaration, VramOutputError,
-        VramSetupError, analyze_definitions, check_use_aliases, parse_circuit_project,
+        CircuitProjectError, ClockedModuleVm, ClockedModuleVmLimits, ModuleBodyPosition, NameKey,
+        PreparedDefinitionError, SourceSnapshot, UseAliases, VramDeclaration, VramOutputError,
+        VramSetupError, parse_circuit_project, prepare_definition_analysis,
     },
     syntax::circuit::Head,
 };
 pub use circuitgame2_project_config::FILE_NAME as PROJECT_CONFIG_FILE_NAME;
 pub use config::{ProjectSettings, decode_utf8};
-pub use diagnostic::CompileError;
+pub use diagnostic::{CompileError, SourceLocation};
+#[cfg(not(target_arch = "wasm32"))]
+pub use gpu_source::compile_gpu_source;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -134,112 +138,126 @@ impl Simulation {
         name_span: Option<Range<usize>>,
         vram: &[config::Vram],
     ) -> Result<Self, CompileError> {
-        let project = parse_circuit_project(snapshots).map_err(|error| match error {
-            CircuitProjectError::Syntax { id, error, .. } => CompileError::Syntax {
-                path: id.components().join("/"),
-                error,
-            },
-            other => CompileError::Message(format!("ソースを読み込めない ({other:?})。")),
-        })?;
-        Self::from_project(&project, name, name_span, vram).map_err(CompileError::from)
-    }
-
-    /// 解析済みの宣言が指すファイルとフォームを使って VM を構築する。
-    fn from_project(
-        project: &CircuitProject<'_>,
-        name: &str,
-        name_span: Option<Range<usize>>,
-        vram: &[config::Vram],
-    ) -> Result<Self, String> {
-        let analysis = analyze_definitions(project)
-            .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
-        let at_entry = |message: String| match &name_span {
-            Some(span) => config::at(Some(span.clone()), &message),
-            None => message,
-        };
-        let qualified = name
-            .strip_prefix("::")
-            .filter(|path| {
-                path.split("::")
-                    .all(|part| !part.is_empty() && !part.contains(':'))
-            })
-            .ok_or_else(|| at_entry("開始モジュールを完全修飾名で指定する。".into()))?;
-        let (parent, unqualified) = qualified
-            .rsplit_once("::")
-            .map_or((None, qualified), |(parent, tail)| (Some(parent), tail));
-        let key = NameKey {
-            parent,
-            name: unqualified,
-        };
-        let (declaration_source, declaration) = analysis
-            .aliases
-            .targets
-            .exports()
-            .declarations()
-            .declaration(key)
-            .ok_or_else(|| at_entry(format!("{name} の宣言がない。")))?;
-        if declaration.head != Head::Module {
-            return Err(at_entry(format!("{name} は module を指す必要がある。")));
-        }
-        let file = project
-            .sources()
-            .iter()
-            .position(|source| source.id.same_file(&declaration_source.id))
-            .ok_or_else(|| at_entry(format!("{name} の宣言元ファイルが見つからない。")))?;
-        let entry = project
-            .circuits()
-            .get(file)
-            .and_then(|parsed| {
-                parsed
-                    .syntax
-                    .entries
-                    .iter()
-                    .position(|entry| entry.form == declaration.form)
-            })
-            .ok_or_else(|| at_entry(format!("{name} の宣言位置が見つからない。")))?;
-        let position = ModuleBodyPosition { file, entry };
-        let aliases = check_use_aliases(&analysis.aliases.targets)
-            .map_err(|error| format!("別名を解決できない ({error:?})。"))?;
-        let declarations: Vec<_> = vram
-            .iter()
-            .map(|item| VramDeclaration {
-                name: &item.name,
-                read_output: item.read_output.get_ref(),
-            })
-            .collect();
-        let compiled = aliases
-            .lower_clocked_vram(position, LIMITS, &declarations)
-            .map_err(|error| match error {
-                VramSetupError::Circuit(error) => format!("{name} を展開できない ({error:?})。"),
-                VramSetupError::Output { declaration, error } => {
-                    let span = vram.get(declaration).map(|item| item.read_output.span());
-                    config::at(span, &vram_error(error))
+        with_module_entry(snapshots, name, name_span.clone(), |aliases, position| {
+            let declarations: Vec<_> = vram
+                .iter()
+                .map(|item| VramDeclaration {
+                    name: &item.name,
+                    read_output: item.read_output.get_ref(),
+                })
+                .collect();
+            let compiled = aliases
+                .lower_clocked_vram(position, LIMITS, &declarations)
+                .map_err(|error| match error {
+                    VramSetupError::Circuit(error) => {
+                        format!("{name} を展開できない ({error:?})。")
+                    }
+                    VramSetupError::Output { declaration, error } => {
+                        let span = vram.get(declaration).map(|item| item.read_output.span());
+                        config::at(span, &vram_error(error))
+                    }
+                    VramSetupError::Allocation => {
+                        "VRAM の公開設定を保持する領域を確保できない。".into()
+                    }
+                })?
+                .ok_or_else(|| entry_message(&name_span, format!("{name} を実行できない。")))?;
+            let mut names = BTreeSet::new();
+            let mut bindings = Vec::new();
+            for declaration in &declarations {
+                if names.insert(declaration.name) {
+                    let index = compiled
+                        .vram_storage_index(declaration.name)
+                        .ok_or_else(|| {
+                            config::at(
+                                None,
+                                &format!(
+                                    "公開 VRAM {:?} の記憶部が見つからない。",
+                                    declaration.name
+                                ),
+                            )
+                        })?;
+                    bindings.push((declaration.name.to_owned(), index));
                 }
-                VramSetupError::Allocation => {
-                    "VRAM の公開設定を保持する領域を確保できない。".into()
-                }
-            })?
-            .ok_or_else(|| at_entry(format!("{name} を実行できない。")))?;
-        let mut names = BTreeSet::new();
-        let mut bindings = Vec::new();
-        for declaration in &declarations {
-            if names.insert(declaration.name) {
-                let index = compiled
-                    .vram_storage_index(declaration.name)
-                    .ok_or_else(|| {
-                        config::at(
-                            None,
-                            &format!("公開 VRAM {:?} の記憶部が見つからない。", declaration.name),
-                        )
-                    })?;
-                bindings.push((declaration.name.to_owned(), index));
             }
-        }
-        Ok(Self {
-            compiled: compiled.into_module(),
-            vram: bindings,
+            Ok(Self {
+                compiled: compiled.into_module(),
+                vram: bindings,
+            })
         })
     }
+}
+
+fn entry_message(span: &Option<Range<usize>>, message: String) -> String {
+    match span {
+        Some(span) => config::at(Some(span.clone()), &message),
+        None => message,
+    }
+}
+
+// VM と GPU の変換が、同じスナップショット上で検査した宣言と別名を使う。
+fn with_module_entry<T>(
+    snapshots: &[SourceSnapshot<'_>],
+    name: &str,
+    name_span: Option<Range<usize>>,
+    compile: impl FnOnce(&UseAliases<'_, '_, '_>, ModuleBodyPosition) -> Result<T, CompileError>,
+) -> Result<T, CompileError> {
+    let project = parse_circuit_project(snapshots).map_err(|error| match error {
+        CircuitProjectError::Syntax { id, error, .. } => CompileError::Syntax {
+            path: id.components().join("/"),
+            error,
+        },
+        other => CompileError::Message(format!("ソースを読み込めない ({other:?})。")),
+    })?;
+    let prepared = prepare_definition_analysis(&project)
+        .map_err(|error| format!("宣言を検査できない。 {error:?}"))?;
+    let analysis = prepared.resolve().map_err(|error| match error {
+        PreparedDefinitionError::Alias(error) => format!("宣言を検査できない。 {error:?}"),
+        PreparedDefinitionError::Definition { error, .. } => {
+            format!("定義内の参照を解決できない。 {error:?}")
+        }
+    })?;
+    let at_entry = |message: String| entry_message(&name_span, message);
+    let qualified = name
+        .strip_prefix("::")
+        .filter(|path| {
+            path.split("::")
+                .all(|part| !part.is_empty() && !part.contains(':'))
+        })
+        .ok_or_else(|| at_entry("開始モジュールを完全修飾名で指定する。".into()))?;
+    let (parent, unqualified) = qualified
+        .rsplit_once("::")
+        .map_or((None, qualified), |(parent, tail)| (Some(parent), tail));
+    let key = NameKey {
+        parent,
+        name: unqualified,
+    };
+    let (declaration_source, declaration) = prepared
+        .targets()
+        .exports()
+        .declarations()
+        .declaration(key)
+        .ok_or_else(|| at_entry(format!("{name} の宣言がない。")))?;
+    if declaration.head != Head::Module {
+        return Err(at_entry(format!("{name} は module を指す必要がある。")).into());
+    }
+    let file = project
+        .sources()
+        .iter()
+        .position(|source| source.id.same_file(&declaration_source.id))
+        .ok_or_else(|| at_entry(format!("{name} の宣言元ファイルが見つからない。")))?;
+    let entry = project
+        .circuits()
+        .get(file)
+        .and_then(|parsed| {
+            parsed
+                .syntax
+                .entries
+                .iter()
+                .position(|entry| entry.form == declaration.form)
+        })
+        .ok_or_else(|| at_entry(format!("{name} の宣言位置が見つからない。")))?;
+    let position = ModuleBodyPosition { file, entry };
+    compile(analysis.aliases(), position)
 }
 
 /// 設定側の主範囲に加え、読み出し信号が指した定義の範囲を示す。

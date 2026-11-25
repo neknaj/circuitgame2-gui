@@ -4,6 +4,17 @@ use std::{error::Error, fmt, ops::Range};
 
 use circuitgame2_core::syntax::circuit::CircuitFormError;
 
+/// コンパイルで検査したソース上の位置。
+#[derive(Debug)]
+pub struct SourceLocation {
+    /// プロジェクト内の正規化済み相対パス。
+    pub path: String,
+    /// コンパイルした本文に対応する文書版。
+    pub revision: u64,
+    /// UTF-8 の半開バイト範囲。
+    pub span: Range<usize>,
+}
+
 /// 回路を実行する前に検出したエラー。
 #[derive(Debug)]
 pub enum CompileError {
@@ -14,12 +25,21 @@ pub enum CompileError {
         /// コンパイルしたソースに対する Core の構文エラー。
         error: CircuitFormError,
     },
+    /// 回路の展開で見つかった違反。
+    Source {
+        /// 違反を報告する主範囲。
+        primary: SourceLocation,
+        /// 同じ違反に関係するソース位置。
+        related: Vec<SourceLocation>,
+        /// 回路を展開できなかった理由。
+        message: String,
+    },
     /// 実行設定や回路の検査・展開で得た表示用のエラー。
     Message(String),
 }
 
 impl CompileError {
-    /// 構文診断が指すファイルと半開バイト範囲を返す。
+    /// 診断の主範囲に対応するファイルと半開バイト範囲を返す。
     ///
     /// この範囲を使う場合は、コンパイル時と同じ本文を参照する。
     pub fn source_location(&self) -> Option<(&str, &Range<usize>)> {
@@ -31,7 +51,16 @@ impl CompileError {
                 };
                 Some((path, span))
             }
+            Self::Source { primary, .. } => Some((&primary.path, &primary.span)),
             Self::Message(_) => None,
+        }
+    }
+
+    /// 診断の主範囲に関係するソース位置を、診断が示す順に返す。
+    pub fn related_source_locations(&self) -> &[SourceLocation] {
+        match self {
+            Self::Source { related, .. } => related,
+            _ => &[],
         }
     }
 }
@@ -60,6 +89,13 @@ impl fmt::Display for CompileError {
                 formatter,
                 "{path} [{}..{}] 回路フォームの構文エラー ({kind:?})。",
                 span.start, span.end,
+            ),
+            Self::Source {
+                primary, message, ..
+            } => write!(
+                formatter,
+                "{} [{}..{}] {message}",
+                primary.path, primary.span.start, primary.span.end
             ),
             Self::Message(message) => formatter.write_str(message),
         }

@@ -18,6 +18,8 @@ circuitgame2-web = { path = "../.." }
 eframe = { version = "=0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "wayland", "x11"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+circuitgame2-core.workspace = true
+circuitgame2-gpu = { path = "../gpu" }
 eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "system_fonts"] }
 rfd = "=0.18.0"
 

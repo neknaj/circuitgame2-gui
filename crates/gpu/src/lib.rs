@@ -264,6 +264,26 @@ impl GpuNor32 {
         self.device.adapter_info()
     }
 
+    /// 指定のレーンワード数と tick 数で必要なバッファーとディスパッチを検査する。
+    ///
+    /// 初期状態や入力を割り当てる前に呼び出せる。この検査ではバッファーを確保しない。
+    ///
+    /// # Errors
+    ///
+    /// デバイスを再利用できない場合、レーンワード数が 0 の場合、
+    /// または指定した実行の寸法がデバイスの資源上限を超える場合にエラーを返す。
+    pub fn check_batch(&self, lane_words: u32, ticks: u32) -> Result<(), GpuNorError> {
+        self.shape(lane_words, ticks).map(|_| ())
+    }
+
+    fn shape(&self, lane_words: u32, ticks: u32) -> Result<Shape, GpuNorError> {
+        if self.unavailable.load(Ordering::Acquire) {
+            return Err(GpuNorError::DeviceUnavailable);
+        }
+        Shape::check(&self.layout, lane_words, ticks, &self.device.limits())
+            .ok_or(GpuNorError::ResourceLimit)
+    }
+
     /// 全 tick を実行し、最終ゲート状態と各 tick の公開出力を読み戻す。
     ///
     /// 初期状態はゲート順、入力は tick、入力ポートの順に並べる。
@@ -288,11 +308,7 @@ impl GpuNor32 {
         initial: &[u32],
         frames: &[u32],
     ) -> Result<Trace, GpuNorError> {
-        if self.unavailable.load(Ordering::Acquire) {
-            return Err(GpuNorError::DeviceUnavailable);
-        }
-        let shape = Shape::check(&self.layout, lane_words, ticks, &self.device.limits())
-            .ok_or(GpuNorError::ResourceLimit)?;
+        let shape = self.shape(lane_words, ticks)?;
         if initial.len() != shape.state_words as usize {
             return Err(GpuNorError::InitialStateLength);
         }
