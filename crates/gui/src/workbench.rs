@@ -6,7 +6,7 @@ use circuitgame2_web::{CompileError, Simulation};
 use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{self, RichText, TextEdit};
 
-use crate::project::Project;
+use crate::{project::Project, vram::VramPanel};
 
 const EXAMPLE: &str = include_str!("../../../site/examples/main.ncg2");
 
@@ -30,6 +30,7 @@ struct LoadedCircuit {
     inputs: Vec<bool>,
     outputs: String,
     tick: u64,
+    vram: VramPanel,
 }
 
 impl Default for Workbench {
@@ -143,11 +144,13 @@ impl Workbench {
             Ok(mut vm) => {
                 let inputs = vec![false; vm.input_width()];
                 let outputs = vm.reset();
+                let vram = VramPanel::new(&vm);
                 self.simulation = Some(LoadedCircuit {
                     vm,
                     inputs,
                     outputs,
                     tick: 0,
+                    vram,
                 });
             }
             Err(error) => self.error = Some(error),
@@ -157,6 +160,7 @@ impl Workbench {
 
 impl LoadedCircuit {
     fn reset(&mut self) {
+        self.inputs.fill(false);
         self.outputs = self.vm.reset();
         self.tick = 0;
     }
@@ -242,11 +246,8 @@ impl eframe::App for Workbench {
                     return;
                 };
                 ui.separator();
-                ui.label(format!("Tick {}", circuit.tick));
                 ui.label("Inputs");
                 circuit.show_inputs(ui);
-                ui.label("Outputs");
-                circuit.show_outputs(ui);
                 ui.horizontal(|ui| {
                     if ui.button("Reset").clicked() {
                         circuit.reset();
@@ -256,6 +257,10 @@ impl eframe::App for Workbench {
                         self.error = circuit.step().err().map(CompileError::from);
                     }
                 });
+                ui.label(format!("Tick {}", circuit.tick));
+                ui.label("Outputs");
+                circuit.show_outputs(ui);
+                circuit.vram.show(ui, &circuit.vm);
             });
         });
     }

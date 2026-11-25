@@ -3,6 +3,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 mod project;
+mod vram;
 #[cfg(target_arch = "wasm32")]
 mod web;
 mod workbench;
