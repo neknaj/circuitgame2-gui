@@ -1,8 +1,14 @@
 # circuitgame2-gui
 
-NCG2 の順序回路をブラウザーで実行する。回路の解析と tick の実行には、CLI と同じ Rust の Core を使う。
+NCG2 の順序回路を実行する GUI。回路の解析と tick の実行には、CLI と同じ Rust の Core を使う。
 
-## 例題を実行する
+## ブラウザーで使う
+
+[共通 GUI](https://neknaj.github.io/circuitgame2-gui/) を開くと、付属の回路を編集し、入力を切り替えて 1 tick ずつ実行できる。複数ファイルの回路を実行するには、「Open project folder」で `circuitgame2.toml` のあるフォルダーを選ぶ。
+
+[従来のブラウザー版](https://neknaj.github.io/circuitgame2-gui/legacy/) も利用できる。
+
+## 従来のブラウザー版をローカルで実行する
 
 Git、Rustup、Python 3 を用意する。このリポジトリで次のコマンドを実行し、ブラウザーで [localhost:8000](http://localhost:8000/) を開く。
 
@@ -39,7 +45,7 @@ CLI リポジトリの `examples/vram` を開くと、公開 VRAM の `screen` �
 
 [NCG2 の仕様と実装計画](https://neknaj.github.io/circuitgame2/docs/)
 
-## 共通 GUI の試作
+## 共通 GUI をローカルで実行する
 
 `circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチ、リセット、1 tick 実行を試せる。
 
@@ -49,7 +55,7 @@ CLI リポジトリの `examples/vram` を開くと、公開 VRAM の `screen` �
 cargo run --locked -p circuitgame2-gui
 ```
 
-ブラウザーで試すには、先に上の手順で `wasm-bindgen` を用意し、次のコマンドを実行して [localhost:8000](http://localhost:8000/) を開く。
+ブラウザーで試すには、上記と同じバージョンの `wasm-bindgen` を用意し、次のコマンドを実行して [localhost:8000](http://localhost:8000/) を開く。
 
 ```sh
 cargo build --locked -p circuitgame2-gui --lib --target wasm32-unknown-unknown
