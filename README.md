@@ -6,7 +6,34 @@ NCG2 の順序回路を実行する GUI。回路の解析と tick の実行に�
 
 [共通 GUI](https://neknaj.github.io/circuitgame2-gui/) を開くと、付属の回路を編集し、入力を切り替えて 1 tick ずつ実行できる。複数ファイルの回路を実行するには、「Open project folder」で `circuitgame2.toml` のあるフォルダーを選ぶ。
 
-[従来のブラウザー版](https://neknaj.github.io/circuitgame2-gui/legacy/) も利用できる。
+## 共通 GUI をローカルで実行する
+
+`circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチ、リセット、1 tick 実行を試せる。
+
+ネイティブで起動する。
+
+```sh
+cargo run --locked -p circuitgame2-gui
+```
+
+ブラウザーで試すには、次のコマンドを実行して [localhost:8000](http://localhost:8000/) を開く。
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+cargo build --locked -p circuitgame2-gui --lib --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unknown/debug/circuitgame2_gui.wasm
+python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
+```
+
+`circuitgame2.toml` を使う場合は、画面の「Open project folder」で設定ファイルがあるフォルダーを選ぶ。「Project source」で編集するファイルを切り替え、「Load circuit」で全ファイルの編集を反映する。構文エラーが出たときは「Go to error」で該当箇所を選択できる。編集中の内容は、そのプロジェクトを開いている間、メモリーに保持する。CLI リポジトリの [`examples/project`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/project) で試せる。
+
+公開した RAM は「VRAM」に表示される。記憶部はアドレス順に並び、各語を最下位ビットから表示する。128 ビットを超える記憶部は「Previous」「Next」で表示範囲を切り替える。CLI リポジトリの [`examples/vram`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/vram) で試せる。
+
+「Waveform」では、各 tick に渡した入力と回路が返した出力から、表示するビットを選べる。直近の最大 128 サンプルを保持する。リセットすると、tick 0 の初期値から記録を始める。
+
+ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
+
+フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。
 
 ## 従来のブラウザー版をローカルで実行する
 
@@ -44,31 +71,3 @@ CLI リポジトリの `examples/vram` を開くと、公開 VRAM の `screen` �
 外部デバイスと NCG2M の実行は未対応。
 
 [NCG2 の仕様と実装計画](https://neknaj.github.io/circuitgame2/docs/)
-
-## 共通 GUI をローカルで実行する
-
-`circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチ、リセット、1 tick 実行を試せる。
-
-ネイティブで起動する。
-
-```sh
-cargo run --locked -p circuitgame2-gui
-```
-
-ブラウザーで試すには、上記と同じバージョンの `wasm-bindgen` を用意し、次のコマンドを実行して [localhost:8000](http://localhost:8000/) を開く。
-
-```sh
-cargo build --locked -p circuitgame2-gui --lib --target wasm32-unknown-unknown
-wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unknown/debug/circuitgame2_gui.wasm
-python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
-```
-
-`circuitgame2.toml` を使う場合は、画面の「Open project folder」で設定ファイルがあるフォルダーを選ぶ。「Project source」で編集するファイルを切り替え、「Load circuit」で全ファイルの編集を反映する。構文エラーが出たときは「Go to error」で該当箇所を選択できる。編集中の内容は、そのプロジェクトを開いている間、メモリーに保持する。CLI リポジトリの [`examples/project`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/project) で試せる。
-
-公開した RAM は「VRAM」に表示される。記憶部はアドレス順に並び、各語を最下位ビットから表示する。128 ビットを超える記憶部は「Previous」「Next」で表示範囲を切り替える。CLI リポジトリの [`examples/vram`](https://github.com/neknaj/circuitgame2-cli/tree/main/examples/vram) で試せる。
-
-「Waveform」では、各 tick に渡した入力と回路が返した出力から、表示するビットを選べる。直近の最大 128 サンプルを保持する。リセットすると、tick 0 の初期値から記録を始める。
-
-ブラウザーでは、同梱の M PLUS 1p を日本語のコメントと診断の表示に使う。OS の IME を使った入力は確認中。
-
-フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。

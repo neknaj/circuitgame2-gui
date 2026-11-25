@@ -36,16 +36,15 @@ jobs:
           persist-credentials: false
       - run: cargo install --locked wasm-bindgen-cli --version 0.2.129
       - run: cargo build --locked --release --workspace --lib --target wasm32-unknown-unknown
+      - name: Generate bindings for the separate browser prototype
+        run: wasm-bindgen --target web --out-dir site/pkg target/wasm32-unknown-unknown/release/circuitgame2_web.wasm
       - name: Assemble the site
         run: |
           set -euo pipefail
-          mkdir -p _site/legacy
+          mkdir -p _site/fonts
           cp crates/gui/web/{index.html,start.js} _site/
-          cp -R crates/gui/web/fonts _site/
-          cp site/{index.html,main.js,project.js,style.css} _site/legacy/
-          cp -R site/examples _site/legacy/
+          cp crates/gui/web/fonts/OFL.txt _site/fonts/
           wasm-bindgen --target web --out-dir _site/pkg target/wasm32-unknown-unknown/release/circuitgame2_gui.wasm
-          wasm-bindgen --target web --out-dir _site/legacy/pkg target/wasm32-unknown-unknown/release/circuitgame2_web.wasm
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
