@@ -1,0 +1,32 @@
+[package]
+name = "circuitgame2-gui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "NCG2 の回路を編集し、tick ごとの入出力を観測する"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ncg2-gui"
+path = "src/main.rs"
+
+[dependencies]
+circuitgame2-web = { path = "../.." }
+eframe = { version = "=0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "wayland", "x11"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "=0.37.0", default-features = false, features = ["accesskit", "system_fonts"] }
+rfd = "=0.18.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { version = "=0.37.0", default-features = false, features = ["web_screen_reader"] }
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["AbortSignal", "Blob", "File", "HtmlCanvasElement"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3.27"

@@ -1,0 +1,45 @@
+name: GUI checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Windows GUI and workspace tests
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo test --locked --workspace
+      - run: cargo build --locked -p circuitgame2-gui --bin ncg2-gui
+
+  wasm:
+    name: Browser builds and WASM bindings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build both browser entry points
+        run: |
+          cargo build --locked --target wasm32-unknown-unknown
+          cargo build --locked --target wasm32-unknown-unknown -p circuitgame2-gui --lib
+      - name: Generate browser bindings
+        run: |
+          cargo install --locked wasm-bindgen-cli --version 0.2.129
+          wasm-bindgen --target web --out-dir site/pkg target/wasm32-unknown-unknown/debug/circuitgame2_web.wasm
+          wasm-bindgen --target web --out-dir crates/gui/web/pkg target/wasm32-unknown-unknown/debug/circuitgame2_gui.wasm

@@ -9,9 +9,10 @@ use std::{
 use circuitgame2_core::project::{SourceKind, SourceSnapshot, normalize_path};
 use serde::Deserialize;
 use toml::{Spanned, Table};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-use crate::Simulation;
+use crate::{CompileError, Simulation};
 
 const SETTINGS: &str = "circuitgame2.toml";
 
@@ -66,7 +67,7 @@ pub(crate) fn at(span: Option<Range<usize>>, reason: &str) -> String {
 }
 
 /// 設定ディレクトリを基準にしたソース一覧と開始モジュール。
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct ProjectSettings {
     paths: Vec<(String, Range<usize>)>,
     path_failure: Option<String>,
@@ -74,14 +75,14 @@ pub struct ProjectSettings {
     vram: Vec<Vram>,
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl ProjectSettings {
     /// TOML を読み、ソース指定を Core の仮想パスに正規化する。
     ///
     /// # Errors
     ///
     /// UTF-8 や設定の構文・項目が不正な場合、または外部デバイスを指定した場合に失敗する。
-    #[wasm_bindgen(constructor)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(bytes: &[u8]) -> Result<ProjectSettings, String> {
         let text = decode_utf8(SETTINGS, bytes)?;
         let config: Settings = toml::from_str(&text).map_err(|error| {
@@ -99,7 +100,7 @@ impl ProjectSettings {
         if let Some(device) = config.device.first() {
             return Err(at(
                 Some(device.span()),
-                "この Web 版は外部デバイスの接続に未対応。",
+                "この GUI は外部デバイスの接続に未対応。",
             ));
         }
         let mut paths = Vec::new();
@@ -146,17 +147,29 @@ impl ProjectSettings {
     ///
     /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
     pub fn compile(&self, texts: Vec<String>) -> Result<Simulation, String> {
+        self.compile_texts(&texts)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl ProjectSettings {
+    /// `source_paths()` と同じ順序の本文を借用してコンパイルする。
+    ///
+    /// # Errors
+    ///
+    /// 本文の件数、ソース指定、開始モジュール、回路の展開または VRAM 設定に問題がある場合に失敗する。
+    pub fn compile_texts(&self, texts: &[String]) -> Result<Simulation, CompileError> {
         if texts.len() != self.paths.len() {
-            return Err(at(None, "sources に対応する本文の件数が一致しない。"));
+            return Err(at(None, "sources に対応する本文の件数が一致しない。").into());
         }
         // 先に指定したファイルの取得に失敗した場合は、ブラウザーがその診断を先に出す。
         if let Some(error) = &self.path_failure {
-            return Err(error.clone());
+            return Err(error.clone().into());
         }
         let snapshots: Vec<_> = self
             .paths
             .iter()
-            .zip(&texts)
+            .zip(texts)
             .map(|((path, _), text)| SourceSnapshot {
                 path,
                 revision: 1,
@@ -184,7 +197,7 @@ fn source_path(value: &Spanned<String>) -> Result<String, String> {
     match path.source_kind() {
         Some(SourceKind::Circuit) => Ok(path.components().join("/")),
         Some(SourceKind::Functional) => Err(at_value(&format!(
-            "{raw:?} は NCG2M のソース。この Web 版は NCG2M の実行に未対応。"
+            "{raw:?} は NCG2M のソース。この GUI は NCG2M の実行に未対応。"
         ))),
         None => Err(at_value(&format!(
             "{raw:?} の拡張子には .ncg2 または .ncg2m を指定する。"
@@ -197,7 +210,7 @@ fn source_path(value: &Spanned<String>) -> Result<String, String> {
 /// # Errors
 ///
 /// UTF-8 に変換できないバイト列を受け取った場合にエラーを返す。
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn decode_utf8(path: &str, bytes: &[u8]) -> Result<String, String> {
     let text = std::str::from_utf8(bytes).map_err(|error| {
         let start = error.valid_up_to();
