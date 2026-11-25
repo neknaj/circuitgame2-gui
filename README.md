@@ -4,11 +4,11 @@ NCG2 の順序回路を実行する GUI。回路の解析と tick の実行に�
 
 ## ブラウザーで使う
 
-[共通 GUI](https://neknaj.github.io/circuitgame2-gui/) を開くと、付属の回路を編集し、入力を切り替えて 1 tick ずつ実行できる。複数ファイルの回路を実行するには、「Open project folder」で `circuitgame2.toml` のあるフォルダーを選ぶ。
+[共通 GUI](https://neknaj.github.io/circuitgame2-gui/) を開くと、付属の回路を編集し、入力を切り替え、手動または連続で実行できる。複数ファイルの回路を実行するには、「Open project folder」で `circuitgame2.toml` のあるフォルダーを選ぶ。
 
 ## 共通 GUI をローカルで実行する
 
-`circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチ、リセット、1 tick 実行を試せる。
+`circuitgame2-gui` クレートの画面は、ネイティブとブラウザーで同じ実装を使う。起動すると付属の回路が開く。ソースを編集して読み込み直し、入力スイッチを操作し、画面上部の Run で連続実行、Pause で一時停止、Step で1 tick 実行できる。Reset を押すと停止して tick 0 に戻る。ticks/s は画面上の実行ペースを設定する。シミュレーションの論理 tick 周期は変わらない。
 
 ネイティブで起動する。
 

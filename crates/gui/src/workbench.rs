@@ -1,6 +1,6 @@
 //! 回路本文と、その本文から作ったシミュレーターを保持する。
 
-use std::ops::Range;
+use std::{ops::Range, time::Duration};
 
 use circuitgame2_web::{CompileError, Simulation};
 use eframe::egui::text::{CCursor, CCursorRange};
@@ -9,6 +9,38 @@ use eframe::egui::{self, RichText, TextEdit};
 use crate::{project::Project, vram::VramPanel, waveform::Waveform};
 
 const EXAMPLE: &str = include_str!("../../../site/examples/main.ncg2");
+const MAX_TICKS_PER_FRAME: u32 = 8;
+
+struct Playback {
+    speed: u32,
+    next_tick: Option<f64>,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Self { speed: 10, next_tick: None }
+    }
+}
+
+impl Playback {
+    fn pause(&mut self) {
+        self.next_tick = None;
+    }
+
+    fn due(&mut self, now: f64) -> u32 {
+        let Some(deadline) = self.next_tick.filter(|&deadline| deadline <= now) else {
+            return 0;
+        };
+        let speed = f64::from(self.speed);
+        // 長く描画が止まった後も、画面を固めずに入力を操作できるようにする。
+        let ticks = (((now - deadline) * speed) as u32)
+            .saturating_add(1)
+            .min(MAX_TICKS_PER_FRAME);
+        let next = deadline + f64::from(ticks) / speed;
+        self.next_tick = Some(if next > now { next } else { now + 1.0 / speed });
+        ticks
+    }
+}
 
 /// 編集した NCG2 ソースを読み込み、入力と経過 tick を操作する画面。
 pub struct Workbench {
@@ -16,6 +48,7 @@ pub struct Workbench {
     selected: usize,
     project_generation: u64,
     simulation: Option<LoadedCircuit>,
+    playback: Playback,
     error: Option<CompileError>,
     pending_jump: Option<(usize, Range<usize>)>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -44,6 +77,7 @@ impl Default for Workbench {
             selected: 0,
             project_generation: 0,
             simulation: None,
+            playback: Playback::default(),
             error: None,
             pending_jump: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -99,6 +133,7 @@ impl Workbench {
                     output.response.response = output.response.response.labelled_by(label.id);
                     if output.response.changed() {
                         self.simulation = None;
+                        self.playback.pause();
                         self.error = None;
                         self.pending_jump = None;
                         #[cfg(not(target_arch = "wasm32"))]
@@ -120,6 +155,7 @@ impl Workbench {
     }
 
     fn load_source(&mut self) {
+        self.playback.pause();
         self.simulation = None;
         self.error = None;
         self.pending_jump = None;
@@ -144,6 +180,83 @@ impl Workbench {
                 });
             }
             Err(error) => self.error = Some(error),
+        }
+    }
+}
+
+enum PlaybackAction {
+    None,
+    Step,
+    Reset,
+}
+
+impl Workbench {
+    fn show_playback(&mut self, ui: &mut egui::Ui) -> PlaybackAction {
+        if self.simulation.is_none() {
+            return PlaybackAction::None;
+        }
+        let now = ui.input(|input| input.time);
+        ui.horizontal_wrapped(|ui| {
+            let running = self.playback.next_tick.is_some();
+            if ui.button(if running { "Pause" } else { "Run" }).clicked() {
+                self.playback.next_tick = (!running).then_some(now);
+                if !running {
+                    self.error = None;
+                }
+            }
+            let step = ui
+                .add_enabled(self.playback.next_tick.is_none(), egui::Button::new("Step"))
+                .clicked();
+            let reset = ui.button("Reset").clicked();
+            let speed_changed = ui
+                .add(
+                    egui::Slider::new(&mut self.playback.speed, 1..=240)
+                        .logarithmic(true)
+                        .suffix(" ticks/s"),
+                )
+                .changed();
+            if speed_changed && self.playback.next_tick.is_some() {
+                self.playback.next_tick = Some(now + 1.0 / f64::from(self.playback.speed));
+            }
+            if reset {
+                PlaybackAction::Reset
+            } else if step {
+                PlaybackAction::Step
+            } else {
+                PlaybackAction::None
+            }
+        })
+        .inner
+    }
+
+    fn advance_playback(&mut self, ctx: &egui::Context, action: PlaybackAction) {
+        let Some(circuit) = self.simulation.as_mut() else {
+            return;
+        };
+        let now = ctx.input(|input| input.time);
+        let count = match action {
+            PlaybackAction::Reset => {
+                self.playback.pause();
+                self.error = None;
+                circuit.reset();
+                ctx.request_repaint();
+                return;
+            }
+            PlaybackAction::Step => {
+                self.error = None;
+                1
+            }
+            PlaybackAction::None => self.playback.due(now),
+        };
+        for _ in 0..count {
+            if let Err(error) = circuit.step() {
+                self.playback.pause();
+                self.error = Some(error.into());
+                break;
+            }
+        }
+        if let Some(next) = self.playback.next_tick {
+            ctx.request_repaint_after(Duration::from_secs_f64((next - now).max(0.0)));
         }
     }
 }
@@ -215,22 +328,27 @@ impl eframe::App for Workbench {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
+            ui.heading("Neknaj Circuit Game 2");
+            let mut playback_action = self.show_playback(ui);
+            ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("Neknaj Circuit Game 2");
-                ui.separator();
 
                 #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Open project folder…").clicked()
                     && let Some(folder) = rfd::FileDialog::new().set_parent(_frame).pick_folder()
                 {
                     match crate::native::open_folder(&folder) {
-                        Ok(project) => self.open_project(project),
+                        Ok(project) => {
+                            self.open_project(project);
+                            playback_action = PlaybackAction::None;
+                        }
                         Err(error) => self.error = Some(error.into()),
                     }
                 }
                 self.show_sources(ui);
                 if ui.button("Load circuit").clicked() {
                     self.load_source();
+                    playback_action = PlaybackAction::None;
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -257,6 +375,13 @@ impl eframe::App for Workbench {
                         );
                     }
                 }
+                if let Some(circuit) = &mut self.simulation {
+                    ui.separator();
+                    ui.label("Inputs");
+                    circuit.show_inputs(ui);
+                }
+                // 同じ描画フレームの入力操作を、次に確定する tick に反映する。
+                self.advance_playback(ui.ctx(), playback_action);
                 if let Some(error) = &self.error {
                     show_diagnostic(
                         ui,
@@ -270,18 +395,6 @@ impl eframe::App for Workbench {
                 let Some(circuit) = &mut self.simulation else {
                     return;
                 };
-                ui.separator();
-                ui.label("Inputs");
-                circuit.show_inputs(ui);
-                ui.horizontal(|ui| {
-                    if ui.button("Reset").clicked() {
-                        circuit.reset();
-                        self.error = None;
-                    }
-                    if ui.button("Step").clicked() {
-                        self.error = circuit.step().err().map(CompileError::from);
-                    }
-                });
                 ui.label(format!("Tick {}", circuit.tick));
                 ui.label("Outputs");
                 circuit.show_outputs(ui);
@@ -343,7 +456,21 @@ fn selection_for_bytes(source: &str, bytes: Range<usize>) -> Option<CCursorRange
 
 #[cfg(test)]
 mod tests {
-    use super::selection_for_bytes;
+    use super::{MAX_TICKS_PER_FRAME, Playback, selection_for_bytes};
+
+    #[test]
+    fn playback_limits_work_after_a_long_frame_and_does_not_replay_it_after_pause() {
+        let mut playback = Playback { speed: 4, next_tick: Some(1.0) };
+        assert_eq!(playback.due(0.75), 0);
+        assert_eq!(playback.due(1.0), 1);
+        assert_eq!(playback.due(1.50), 2);
+        assert_eq!(playback.due(30.0), MAX_TICKS_PER_FRAME);
+        assert_eq!(playback.due(30.0), 0);
+        playback.pause();
+        assert_eq!(playback.due(31.0), 0);
+        playback.next_tick = Some(31.0);
+        assert_eq!(playback.due(31.0), 1);
+    }
 
     #[test]
     fn diagnostic_selection_uses_characters_and_keeps_empty_ranges() {
