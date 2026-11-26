@@ -41,6 +41,8 @@ python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 
 再開するときは同じ回路を読み込み、「Restore snapshot」でファイルを選ぶ。配線や設定の tick 周期が一致すると、保存時の tick・入出力・RAM を表示し、以降の波形をそこから記録する。「Step」で次の tick を実行できる。
 
+ブラウザーでは「Save in browser」で現在の状態を IndexedDB に保存できる。ページを開き直した後は「Saved snapshots」から選び、「Restore selected snapshot」を押す。保存成功はブラウザーが本体と一覧の書き込みを確定した後に表示する。
+
 ファイル形式は CLI の `ncg2 run --save-at` と `--restore` と共通。同じ回路と tick 周期ならネイティブ、ブラウザー、CLI の間でファイルを渡せる。[CLI の保存と復元](https://github.com/neknaj/circuitgame2-cli#readme)
 
 ## デスクトップ GPU の回路実行
