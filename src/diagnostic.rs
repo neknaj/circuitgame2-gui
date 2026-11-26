@@ -2,7 +2,11 @@
 
 use std::{error::Error, fmt, ops::Range};
 
-use circuitgame2_core::{project::LocatedName, syntax::circuit::CircuitFormError};
+use circuitgame2_core::{
+    netlist::{ClockedStorageError, ClockedVmError, StateAllocationError},
+    project::{ClockedModuleVmError, LocatedName},
+    syntax::circuit::CircuitFormError,
+};
 
 /// コンパイルで検査したソース上の位置。
 #[derive(Debug)]
@@ -103,6 +107,29 @@ impl fmt::Display for CompileError {
 }
 
 impl Error for CompileError {}
+
+/// 容量超過の原因となった素子の参照位置と設定上限を表示に残す。
+pub(crate) fn clocked_error(
+    name: &str,
+    error: ClockedModuleVmError<'_, '_>,
+    state_bits: usize,
+) -> CompileError {
+    if let ClockedModuleVmError::Vm(
+        ClockedVmError::Storage {
+            error: ClockedStorageError::State(StateAllocationError::Capacity),
+            ..
+        },
+        site,
+    ) = error
+    {
+        let message = format!("{name} の記憶領域が総状態容量の上限 {state_bits} ビットを超える。");
+        return match site {
+            Some(site) => reported(&site, [], message),
+            None => message.into(),
+        };
+    }
+    format!("{name} を展開できない ({error:?})。").into()
+}
 
 #[cfg(test)]
 mod tests {

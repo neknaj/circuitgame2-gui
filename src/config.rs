@@ -25,6 +25,7 @@ pub struct ProjectSettings {
     path_failure: Option<String>,
     entry: Option<Spanned<String>>,
     vram: Vec<Vram>,
+    state_bits: usize,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -52,6 +53,7 @@ impl ProjectSettings {
             ));
         }
         let mut paths = Vec::new();
+        let state_bits = config.simulation_state_bits();
         let mut seen = BTreeSet::new();
         let mut path_failure = None;
         for value in config.sources.into_inner() {
@@ -71,6 +73,7 @@ impl ProjectSettings {
             path_failure,
             entry: config.entry,
             vram: config.vram,
+            state_bits,
         })
     }
 
@@ -117,6 +120,7 @@ impl ProjectSettings {
             entry,
             self.entry.as_ref().map(Spanned::span),
             &self.vram,
+            self.state_bits,
         )
     }
 
@@ -142,6 +146,7 @@ impl ProjectSettings {
             entry,
             self.entry.as_ref().map(Spanned::span),
             &self.vram,
+            self.state_bits,
         )
     }
 
@@ -257,4 +262,29 @@ pub fn decode_utf8(path: &str, bytes: &[u8]) -> Result<String, String> {
         format!("{path}[{start}..{end}] 不正な UTF-8 が含まれる。")
     })?;
     Ok(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectSettings;
+
+    #[test]
+    fn configured_capacity_reaches_the_project_simulator() {
+        let sources = ["(using nor)\n(memory bank (address 15) (data (bits 64)))\n\
+            (module main (in (address (bits 15))) (out (value (bits 64)))\n\
+              (def value (bank address #x0000000000000000 0)))"
+            .to_owned()];
+        let default = ProjectSettings::new(b"sources = [\"main.ncg2\"]").unwrap();
+        assert!(default.compile_texts(&sources).is_ok());
+
+        let limited = ProjectSettings::new(b"sources = [\"main.ncg2\"]\nstate-bits = 128").unwrap();
+        let error = limited.compile_texts(&sources).err().unwrap();
+        let (path, span) = error.source_location().unwrap();
+        assert_eq!(path, "main.ncg2");
+        assert_eq!(
+            &sources[0][span.clone()],
+            "(bank address #x0000000000000000 0)"
+        );
+        assert!(error.to_string().contains("128 ビット"), "{error}");
+    }
 }

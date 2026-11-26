@@ -30,7 +30,7 @@ const LIMITS: ClockedModuleVmLimits = ClockedModuleVmLimits {
     width: 65_536,
     wiring_bits: 1_048_576,
     gates: 1_048_576,
-    state_bits: 1_048_576,
+    state_bits: circuitgame2_project_config::DEFAULT_STATE_BITS,
 };
 
 /// ブラウザーでリセットと tick 操作を行える順序回路。
@@ -142,7 +142,7 @@ impl Simulation {
             revision: 1,
             text: source,
         }];
-        Self::from_snapshots(&snapshots, "::main", None, &[])
+        Self::from_snapshots(&snapshots, "::main", None, &[], LIMITS.state_bits)
     }
 
     /// デスクトップ画面の単独ソースを読み込み、`module` なら順序回路を作る。
@@ -159,7 +159,7 @@ impl Simulation {
             revision: 1,
             text: source,
         }];
-        Self::workbench_from_snapshots(&snapshots, "::main", None, &[])
+        Self::workbench_from_snapshots(&snapshots, "::main", None, &[], LIMITS.state_bits)
     }
 
     fn vram_memory(&self, name: &str) -> Option<&[bool]> {
@@ -172,13 +172,16 @@ impl Simulation {
         name: &str,
         name_span: Option<Range<usize>>,
         vram: &[config::Vram],
+        state_bits: usize,
     ) -> Result<Self, CompileError> {
         with_module_entry(
             snapshots,
             name,
             name_span.clone(),
             |project, aliases, position| {
-                Self::lower_module(project, aliases, position, name, &name_span, vram)
+                Self::lower_module(
+                    project, aliases, position, name, &name_span, vram, state_bits,
+                )
             },
         )
     }
@@ -189,6 +192,7 @@ impl Simulation {
         name: &str,
         name_span: Option<Range<usize>>,
         vram: &[config::Vram],
+        state_bits: usize,
     ) -> Result<Option<Self>, CompileError> {
         with_circuit_entry(
             snapshots,
@@ -196,9 +200,10 @@ impl Simulation {
             &name_span,
             "開始回路",
             |project, aliases, position, head| match head {
-                Head::Module => {
-                    Self::lower_module(project, aliases, position, name, &name_span, vram).map(Some)
-                }
+                Head::Module => Self::lower_module(
+                    project, aliases, position, name, &name_span, vram, state_bits,
+                )
+                .map(Some),
                 Head::Func => Ok(None),
                 _ => Err(entry_message(
                     &name_span,
@@ -216,6 +221,7 @@ impl Simulation {
         name: &str,
         name_span: &Option<Range<usize>>,
         vram: &[config::Vram],
+        state_bits: usize,
     ) -> Result<Self, CompileError> {
         let declarations: Vec<_> = vram
             .iter()
@@ -225,17 +231,24 @@ impl Simulation {
             })
             .collect();
         let compiled = aliases
-            .lower_clocked_vram(position, LIMITS, &declarations)
+            .lower_clocked_vram(
+                position,
+                ClockedModuleVmLimits {
+                    state_bits,
+                    ..LIMITS
+                },
+                &declarations,
+            )
             .map_err(|error| match error {
                 VramSetupError::Circuit(error) => {
-                    format!("{name} を展開できない ({error:?})。")
+                    diagnostic::clocked_error(name, error, state_bits)
                 }
                 VramSetupError::Output { declaration, error } => {
                     let span = vram.get(declaration).map(|item| item.read_output.span());
-                    config::at(span, &vram_error(error))
+                    config::at(span, &vram_error(error)).into()
                 }
                 VramSetupError::Allocation => {
-                    "VRAM の公開設定を保持する領域を確保できない。".into()
+                    CompileError::Message("VRAM の公開設定を保持する領域を確保できない。".into())
                 }
             })?
             .ok_or_else(|| entry_message(name_span, format!("{name} を実行できない。")))?;
