@@ -1,5 +1,6 @@
 //! Core の順序回路 VM を実行し、WASM ではブラウザから呼べる形にする。
 
+mod checkpoint;
 mod config;
 mod diagnostic;
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,6 +41,10 @@ pub struct Simulation {
     vram: Vec<(String, usize)>,
     inputs: Vec<ports::Port>,
     outputs: Vec<ports::Port>,
+    last_input: Vec<bool>,
+    tick: u64,
+    generation: u64,
+    period: (u64, u64),
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -88,6 +93,9 @@ impl Simulation {
 
     /// 回路を初期状態へ戻し、tick 0 の出力を返す。
     pub fn reset(&mut self) -> String {
+        self.last_input.fill(false);
+        self.tick = 0;
+        self.generation = self.generation.wrapping_add(1);
         bit_text(self.compiled.vm.reset())
     }
 
@@ -107,12 +115,17 @@ impl Simulation {
                 self.input_width()
             ));
         }
+        let tick = self.tick.checked_add(1).ok_or("tick の上限に達した。")?;
         let input: Vec<_> = input.bytes().map(|byte| byte == b'1').collect();
-        self.compiled
+        let output = self
+            .compiled
             .vm
             .step(&input)
             .map(bit_text)
-            .map_err(|error| format!("tick を実行できない。 {error:?}"))
+            .map_err(|error| format!("tick を実行できない。 {error:?}"))?;
+        self.tick = tick;
+        self.last_input = input;
+        Ok(output)
     }
 }
 
@@ -275,8 +288,13 @@ impl Simulation {
                 bindings.push((declaration.name.to_owned(), index));
             }
         }
+        let last_input = vec![false; compiled.inputs().total_bits()];
         Ok(Self {
             compiled: compiled.into_module(),
+            last_input,
+            tick: 0,
+            generation: 0,
+            period: (0, 0),
             vram: bindings,
             inputs,
             outputs,

@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "3"
 
 [workspace.dependencies]
-circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "5b77b33c1ed04061bd378f4f999566cb52f04b1c" }
+circuitgame2-core = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "5ced7a65ed774a781213ce78b2cba21c7fc65579" }
 
 [package]
 name = "circuitgame2-web"
@@ -19,7 +19,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 circuitgame2-core.workspace = true
-circuitgame2-project-config = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "5b77b33c1ed04061bd378f4f999566cb52f04b1c" }
+circuitgame2-project-config = { version = "0.1.0", git = "https://github.com/neknaj/circuitgame2-core", rev = "5ced7a65ed774a781213ce78b2cba21c7fc65579" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"

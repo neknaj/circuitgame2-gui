@@ -1,6 +1,10 @@
 //! 選んだフォルダーから実行設定とソースファイルを読み込む。
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::Path,
+};
 
 use circuitgame2_web::{ProjectSettings, decode_utf8};
 
@@ -28,6 +32,52 @@ pub(crate) fn open_folder(folder: &Path) -> Result<Project, String> {
     })
 }
 
+/// 期待バイト数を確かめてから、選択したスナップショットを読み込む。
+///
+/// # Errors
+///
+/// 通常のファイルを開けない場合、長さが異なる場合、領域を確保できない場合に失敗する。
+pub(crate) fn read_snapshot(path: &Path, expected: usize) -> Result<Vec<u8>, String> {
+    let io_error = |error| format!("{} を読み込めない。{error}", path.display());
+    if !fs::metadata(path).map_err(io_error)?.is_file() {
+        return Err(format!("{} は通常のファイルではない。", path.display()));
+    }
+    let mut file = fs::File::open(path).map_err(io_error)?;
+    let details = file.metadata().map_err(io_error)?;
+    let wrong_len = || format!("{} の長さが現在の回路と一致しない。", path.display());
+    if !details.is_file() || details.len() != expected as u64 {
+        return Err(wrong_len());
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(expected)
+        .map_err(|_| "ファイルを読む領域を確保できない。")?;
+    bytes.resize(expected, 0);
+    file.read_exact(&mut bytes).map_err(io_error)?;
+    if file.read(&mut [0]).map_err(io_error)? != 0 {
+        return Err(wrong_len());
+    }
+    Ok(bytes)
+}
+
+/// 全バイトを書き終えた一時ファイルを選択先に置く。
+///
+/// # Errors
+///
+/// 選択先と同じフォルダーで一時ファイルを作成、書き込み、配置できない場合に失敗する。
+pub(crate) fn save_snapshot(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let io_error = |error| format!("{} に保存できない。{error}", path.display());
+    let parent = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
+    file.write_all(bytes).map_err(io_error)?;
+    file.as_file().sync_all().map_err(io_error)?;
+    file.persist(path).map_err(|error| io_error(error.error))?;
+    Ok(())
+}
+
 fn read_inside(folder: &Path, relative: &str) -> Result<Vec<u8>, String> {
     let path = folder
         .join(relative)
@@ -43,6 +93,17 @@ fn read_inside(folder: &Path, relative: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::{MANIFEST, fs, open_folder};
+
+    #[test]
+    fn snapshot_storage_checks_expected_length_and_replaces_complete_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("状態.ncg2state");
+        super::save_snapshot(&path, b"first").unwrap();
+        assert_eq!(super::read_snapshot(&path, 5).unwrap(), b"first");
+        assert!(super::read_snapshot(&path, 4).is_err());
+        super::save_snapshot(&path, b"updated").unwrap();
+        assert_eq!(super::read_snapshot(&path, 7).unwrap(), b"updated");
+    }
 
     #[test]
     fn native_folder_resolves_sources_and_preserves_utf8_diagnostics() {
