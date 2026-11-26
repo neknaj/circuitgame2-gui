@@ -26,6 +26,7 @@ pub struct ProjectSettings {
     entry: Option<Spanned<String>>,
     vram: Vec<Vram>,
     state_bits: usize,
+    period: (u64, u64),
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -54,6 +55,10 @@ impl ProjectSettings {
         }
         let mut paths = Vec::new();
         let state_bits = config.simulation_state_bits();
+        let period = config.tick_ns.as_ref().map_or((0, 0), |period| {
+            let period = period.get_ref();
+            (period.numerator.get(), period.denominator.get())
+        });
         let mut seen = BTreeSet::new();
         let mut path_failure = None;
         for value in config.sources.into_inner() {
@@ -74,6 +79,7 @@ impl ProjectSettings {
             entry: config.entry,
             vram: config.vram,
             state_bits,
+            period,
         })
     }
 
@@ -122,6 +128,10 @@ impl ProjectSettings {
             &self.vram,
             self.state_bits,
         )
+        .map(|mut simulation| {
+            simulation.period = self.period;
+            simulation
+        })
     }
 
     /// デスクトップ画面で、設定の開始宣言が `module` なら順序回路を作る。
@@ -148,6 +158,12 @@ impl ProjectSettings {
             &self.vram,
             self.state_bits,
         )
+        .map(|mut simulation| {
+            if let Some(simulation) = &mut simulation {
+                simulation.period = self.period;
+            }
+            simulation
+        })
     }
 
     /// 設定とソースを使い、デスクトップ GPU 向けの順序 NOR 回路を組み立てる。

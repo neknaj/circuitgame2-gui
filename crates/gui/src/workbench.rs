@@ -50,6 +50,8 @@ pub struct Workbench {
     sources: Sources,
     selected: usize,
     project_generation: u64,
+    #[cfg(target_arch = "wasm32")]
+    snapshot_context: u64,
     simulation: Option<LoadedCircuit>,
     playback: Playback,
     error: Option<CompileError>,
@@ -81,6 +83,8 @@ impl Default for Workbench {
             sources: Sources::Single(EXAMPLE.to_owned()),
             selected: 0,
             project_generation: 0,
+            #[cfg(target_arch = "wasm32")]
+            snapshot_context: 0,
             simulation: None,
             playback: Playback::default(),
             error: None,
@@ -103,6 +107,97 @@ impl Workbench {
         self.selected = 0;
         self.project_generation = self.project_generation.wrapping_add(1);
         self.load_source();
+    }
+
+    /// 読み込み中に回路が差し替わったかをブラウザ側で照合する。
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn snapshot_context(&self) -> u64 {
+        self.snapshot_context
+    }
+
+    /// 開いている回路のスナップショットのサイズを返す。
+    ///
+    /// # Errors
+    ///
+    /// 回路が未読み込み、または配線を形式で表せない場合に失敗する。
+    pub(crate) fn snapshot_len(&self) -> Result<usize, String> {
+        let circuit = self
+            .simulation
+            .as_ref()
+            .ok_or("Load the circuit before restoring.")?;
+        circuit.vm.snapshot_len()
+    }
+
+    /// 確定した tick のスナップショットを作る。
+    ///
+    /// # Errors
+    ///
+    /// 回路が未読み込み、または確定状態を符号化できない場合に失敗する。
+    pub(crate) fn create_snapshot(&self) -> Result<Vec<u8>, String> {
+        let circuit = self
+            .simulation
+            .as_ref()
+            .ok_or("Load the circuit before saving.")?;
+        circuit.vm.create_snapshot()
+    }
+
+    /// ファイルから回路を再開し、端子と波形の表示を確定状態にそろえる。
+    ///
+    /// # Errors
+    ///
+    /// 回路が未読み込み、またはファイルが回路と一致しない場合は現在の表示と回路を保つ。
+    pub(crate) fn restore_snapshot(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let circuit = self
+            .simulation
+            .as_mut()
+            .ok_or("Load the circuit before restoring.")?;
+        circuit.outputs = circuit.vm.restore_snapshot(bytes)?;
+        circuit.inputs.copy_from_slice(circuit.vm.applied_input());
+        circuit.tick = circuit.vm.tick_count();
+        circuit.waveform.reset(&circuit.inputs, &circuit.outputs);
+        self.playback.pause();
+        self.error = None;
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn show_snapshot_controls(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) -> bool {
+        if self.simulation.is_none() {
+            return false;
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Save snapshot…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_parent(frame)
+                    .set_file_name("circuit.ncg2state")
+                    .add_filter("NCG2 snapshot", &["ncg2state"])
+                    .save_file()
+            {
+                if let Err(error) = self
+                    .create_snapshot()
+                    .and_then(|bytes| crate::native::save_snapshot(&path, &bytes))
+                {
+                    self.error = Some(error.into());
+                }
+            }
+            if ui.button("Restore snapshot…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_parent(frame)
+                    .add_filter("NCG2 snapshot", &["ncg2state", "bin"])
+                    .pick_file()
+            {
+                match self
+                    .snapshot_len()
+                    .and_then(|size| crate::native::read_snapshot(&path, size))
+                    .and_then(|bytes| self.restore_snapshot(&bytes))
+                {
+                    Ok(()) => return true,
+                    Err(error) => self.error = Some(error.into()),
+                }
+            }
+            false
+        })
+        .inner
     }
 
     fn show_sources(&mut self, ui: &mut egui::Ui) {
@@ -139,6 +234,10 @@ impl Workbench {
                         .show(ui);
                     output.response.response = output.response.response.labelled_by(label.id);
                     if output.response.changed() {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            self.snapshot_context = self.snapshot_context.wrapping_add(1);
+                        }
                         self.simulation = None;
                         self.playback.pause();
                         self.error = None;
@@ -165,6 +264,10 @@ impl Workbench {
     }
 
     fn load_source(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.snapshot_context = self.snapshot_context.wrapping_add(1);
+        }
         self.playback.pause();
         self.simulation = None;
         self.error = None;
@@ -347,14 +450,13 @@ impl LoadedCircuit {
     }
 
     fn step(&mut self) -> Result<(), String> {
-        let tick = self.tick.checked_add(1).ok_or("Tick counter is full.")?;
         let frame: String = self
             .inputs
             .iter()
             .map(|&on| if on { '1' } else { '0' })
             .collect();
         self.outputs = self.vm.tick(&frame)?;
-        self.tick = tick;
+        self.tick = self.vm.tick_count();
         self.waveform.record(&self.inputs, &self.outputs);
         Ok(())
     }
@@ -387,6 +489,10 @@ impl eframe::App for Workbench {
                 self.show_sources(ui);
                 if ui.button("Load circuit").clicked() {
                     self.load_source();
+                    playback_action = PlaybackAction::None;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.show_snapshot_controls(ui, _frame) {
                     playback_action = PlaybackAction::None;
                 }
                 #[cfg(not(target_arch = "wasm32"))]

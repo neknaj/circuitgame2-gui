@@ -45,6 +45,8 @@ jobs:
           cp crates/gui/web/{index.html,start.js} _site/
           cp crates/gui/web/fonts/OFL.txt _site/fonts/
           wasm-bindgen --target web --out-dir _site/pkg target/wasm32-unknown-unknown/release/circuitgame2_gui.wasm
+      - name: Check CLI snapshot round-trip in Chrome
+        run: python3 crates/gui/tests/browser_snapshot/run.py _site
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:

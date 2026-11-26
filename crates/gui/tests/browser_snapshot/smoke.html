@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Snapshot browser smoke test</title>
+<canvas id="workbench" style="width: 480px; height: 400px"></canvas>
+<script type="module">
+const sameBytes = (left, right) => left.length === right.length && left.every((byte, index) => byte === right[index]);
+
+async function verifySnapshot() {
+  const { default: init, BrowserWorkbench } = await import("./pkg/circuitgame2_gui.js");
+  await init();
+  const workbench = new BrowserWorkbench();
+  await workbench.start(document.querySelector("#workbench"));
+
+  const response = await fetch("./cli-snapshot.bin");
+  if (!response.ok) throw new Error(`Fixture request failed: ${response.status}`);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const signal = new AbortController().signal;
+  if (sameBytes(workbench.export_snapshot(), bytes)) {
+    throw new Error("The fixture already matches the untouched workbench.");
+  }
+  if (!await workbench.import_snapshot(new File([bytes], "cli-snapshot.bin"), signal)) {
+    throw new Error("The CLI snapshot was not restored.");
+  }
+  if (!sameBytes(workbench.export_snapshot(), bytes)) {
+    throw new Error("The restored snapshot differs from the CLI file.");
+  }
+
+  for (const invalid of [bytes.slice(1), new Uint8Array(bytes.length + 1)]) {
+    try {
+      await workbench.import_snapshot(new File([invalid], "invalid.bin"), signal);
+      throw new Error("An incorrectly sized file was accepted.");
+    } catch (error) {
+      if (!String(error).includes(`必要な ${bytes.length} バイト`)) throw error;
+    }
+    if (!sameBytes(workbench.export_snapshot(), bytes)) {
+      throw new Error("Rejecting an incorrectly sized file changed the restored state.");
+    }
+  }
+}
+
+let result = "PASS";
+try {
+  await verifySnapshot();
+} catch (error) {
+  result = `FAIL: ${error instanceof Error ? error.message : String(error)}`;
+}
+await fetch("/snapshot-result", { method: "POST", body: result });
+</script>
+</html>

@@ -35,6 +35,14 @@ python -m http.server --bind 127.0.0.1 --directory crates/gui/web 8000
 
 フォントの[配布元](https://github.com/google/fonts/tree/d714b17ce2379f06daf6295617f961df605dccb5/ofl/mplus1p)と[ライセンス](crates/gui/web/fonts/OFL.txt)を参照。
 
+## スナップショットから再開する
+
+順序回路を開き、ネイティブでは「Save snapshot…」、ブラウザーでは「Download snapshot」を押す。操作した時点の確定 tick、適用済みの入力、ゲート、ラッチ、RAM の状態をファイルに保存する。入力スイッチを変更してまだ tick を進めていない場合、保存するのは最後に回路へ適用した入力である。
+
+再開するときは同じ回路を読み込み、「Restore snapshot」でファイルを選ぶ。配線や設定の tick 周期が一致すると、保存時の tick・入出力・RAM を表示し、以降の波形をそこから記録する。「Step」で次の tick を実行できる。
+
+ファイル形式は CLI の `ncg2 run --save-at` と `--restore` と共通。同じ回路と tick 周期ならネイティブ、ブラウザー、CLI の間でファイルを渡せる。[CLI の保存と復元](https://github.com/neknaj/circuitgame2-cli#readme)
+
 ## デスクトップ GPU の回路実行
 
 デスクトップ版では Vulkan に対応した GPU を使う。`circuitgame2-gpu` の Rust API は Core の検査済み配線を受け取る。`GpuNor32` は複数の入力列で同じ順序 NOR 回路を実行し、`GpuCombinationalNor32` は複数の入力で同じ組み合わせ NOR 回路を評価する。組み合わせ回路では1回のディスパッチで公開出力を計算する。

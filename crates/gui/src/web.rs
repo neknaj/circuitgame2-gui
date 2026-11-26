@@ -87,15 +87,90 @@ impl BrowserWorkbench {
         let Some(project) = project? else {
             return Ok(());
         };
-        let mut workbench = self
+        self.runner
+            .app_mut::<Workbench>()
+            .ok_or_else(|| JsValue::from_str("回路の画面を開いていない。"))?
+            .open_project(project);
+        self.repaint();
+        Ok(())
+    }
+
+    /// 現在の確定済み tick を、CLI と共通のバイナリ形式で返す。
+    ///
+    /// # Errors
+    ///
+    /// 回路が読み込まれていない場合、実行構成が保存に対応していない場合、または符号化に失敗した場合に返す。
+    pub fn export_snapshot(&self) -> Result<Uint8Array, JsValue> {
+        let workbench = self
             .runner
             .app_mut::<Workbench>()
             .ok_or_else(|| JsValue::from_str("回路の画面を開いていない。"))?;
-        workbench.open_project(project);
+        let bytes = workbench
+            .create_snapshot()
+            .map_err(|error| JsValue::from_str(&error))?;
+        Ok(Uint8Array::from(bytes.as_slice()))
+    }
+
+    /// 選んだファイルから、読み込みを始めたときの回路に実行状態を戻す。
+    ///
+    /// 回路から求めたサイズとファイルのサイズを照合してから読み込む。中断を通知された場合は `false` を返す。
+    ///
+    /// # Errors
+    ///
+    /// ファイルの長さや内容が回路に合わない場合、読み込み中に対象の回路が変わった場合、
+    /// またはファイルを読めない場合に返す。
+    pub async fn import_snapshot(&self, file: File, signal: AbortSignal) -> Result<bool, JsValue> {
+        if signal.aborted() {
+            return Ok(false);
+        }
+        let (expected, snapshot_context) = {
+            let workbench = self
+                .runner
+                .app_mut::<Workbench>()
+                .ok_or_else(|| JsValue::from_str("回路の画面を開いていない。"))?;
+            let expected = workbench
+                .snapshot_len()
+                .map_err(|error| JsValue::from_str(&error))?;
+            (expected, workbench.snapshot_context())
+        };
+        let wrong_size = || {
+            JsValue::from_str(&format!(
+                "スナップショットのサイズが必要な {expected} バイトと異なる。"
+            ))
+        };
+        if file.size() != expected as f64 {
+            return Err(wrong_size());
+        }
+
+        let buffer = JsFuture::from(file.array_buffer()).await;
+        if signal.aborted() {
+            return Ok(false);
+        }
+        let buffer = buffer.map_err(|_| JsValue::from_str("スナップショットを読み込めない。"))?;
+        let bytes = Uint8Array::new(&buffer);
+        if bytes.length() as usize != expected {
+            return Err(wrong_size());
+        }
+        {
+            let mut workbench = self
+                .runner
+                .app_mut::<Workbench>()
+                .ok_or_else(|| JsValue::from_str("回路の画面を開いていない。"))?;
+            if workbench.snapshot_context() != snapshot_context {
+                return Err(JsValue::from_str("読み込み中に回路が切り替わった。"));
+            }
+            workbench
+                .restore_snapshot(&bytes.to_vec())
+                .map_err(|error| JsValue::from_str(&error))?;
+        }
+        self.repaint();
+        Ok(true)
+    }
+
+    fn repaint(&self) {
         if let Some(context) = self.context.borrow().as_ref() {
             context.request_repaint();
         }
-        Ok(())
     }
 }
 
