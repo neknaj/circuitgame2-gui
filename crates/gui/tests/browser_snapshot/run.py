@@ -12,7 +12,7 @@ from threading import Thread
 from time import monotonic
 
 
-def run_browser(site, chrome):
+def run_browser(site, chrome, test_page):
     results = SimpleQueue()
 
     class SmokeHandler(SimpleHTTPRequestHandler):
@@ -31,14 +31,14 @@ def run_browser(site, chrome):
         workspace = Path(directory)
         webroot = workspace / "site"
         shutil.copytree(site, webroot)
-        for name in ("smoke.html", "cli-snapshot.bin"):
+        for name in (test_page, "cli-snapshot.bin"):
             shutil.copyfile(fixtures / name, webroot / name)
 
         handler = partial(SmokeHandler, directory=webroot)
         with ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
-            url = f"http://127.0.0.1:{server.server_port}/smoke.html"
+            url = f"http://127.0.0.1:{server.server_port}/{test_page}"
             log_path = workspace / "chrome.log"
             try:
                 with log_path.open("wb") as log:
@@ -81,14 +81,15 @@ def run_browser(site, chrome):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("site", type=Path, help="assembled Pages site directory")
+    parser.add_argument("--test-page", choices=("smoke.html", "storage.html"), default="smoke.html")
     args = parser.parse_args()
     chrome = shutil.which("google-chrome")
     if chrome is None:
         raise SystemExit("The browser smoke test needs the runner's installed google-chrome.")
-    result = run_browser(args.site, chrome)
+    result = run_browser(args.site, chrome, args.test_page)
     if result != "PASS":
         raise SystemExit(result)
-    print("The CLI snapshot survived a Chrome WASM round trip and both invalid lengths were rejected.")
+    print(f"Chrome snapshot check passed: {args.test_page}")
 
 
 if __name__ == "__main__":

@@ -111,6 +111,19 @@ impl BrowserWorkbench {
         Ok(Uint8Array::from(bytes.as_slice()))
     }
 
+    /// 読み込みの開始時と終了時に照合する回路の世代を返す。
+    ///
+    /// # Errors
+    ///
+    /// 画面が閉じている場合に失敗する。
+    pub fn snapshot_context(&self) -> Result<u64, JsValue> {
+        let workbench = self
+            .runner
+            .app_mut::<Workbench>()
+            .ok_or_else(|| JsValue::from_str("回路の画面を開いていない。"))?;
+        Ok(workbench.snapshot_context())
+    }
+
     /// 選んだファイルから、読み込みを始めたときの回路に実行状態を戻す。
     ///
     /// 回路から求めたサイズとファイルのサイズを照合してから読み込む。中断を通知された場合は `false` を返す。

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Snapshot storage transaction test</title>
+<body>
+<script type="module">
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+async function expectFailure(code, operation) {
+  try {
+    await operation();
+  } catch (error) {
+    assert(error.code === code, `Expected ${code}, received ${error.code}: ${error.message}`);
+    return;
+  }
+  throw new Error(`Operation succeeded but ${code} was expected.`);
+}
+
+async function verifyStorage() {
+  const { saveSnapshot, listSnapshots, readSnapshot } = await import("./snapshot-store.js");
+  assert((await listSnapshots()).length === 0, "The fresh profile has saved snapshots.");
+
+  const transactionMethod = IDBDatabase.prototype.transaction;
+  const addMethod = IDBObjectStore.prototype.add;
+  const bytes = new Uint8Array([0, 254, 128, 12]);
+  let committed = false;
+  let saved;
+  IDBDatabase.prototype.transaction = function (stores, mode, options) {
+    const transaction = transactionMethod.call(this, stores, mode, options);
+    transaction.addEventListener("complete", () => { committed = true; });
+    return transaction;
+  };
+  try {
+    const pending = saveSnapshot(bytes);
+    bytes.fill(33);
+    saved = await pending;
+    assert(committed, "saveSnapshot resolved before the transaction committed.");
+  } finally {
+    IDBDatabase.prototype.transaction = transactionMethod;
+  }
+
+  // 新しいモジュールから接続し直しても、確定した一覧と本体が読める。
+  const reopened = await import("./snapshot-store.js?reopened");
+  IDBDatabase.prototype.transaction = function (stores, mode, options) {
+    const transaction = transactionMethod.call(this, stores, mode, options);
+    assert(transaction.objectStoreNames.length === 1 && transaction.objectStoreNames.contains("metadata"),
+      "The listing transaction can access snapshot bodies.");
+    return transaction;
+  };
+  try {
+    const entries = await reopened.listSnapshots();
+    assert(entries.length === 1 && entries[0].id === saved &&
+      entries[0].size === bytes.length && Number.isFinite(entries[0].savedAt),
+      "The committed metadata was not returned.");
+  } finally {
+    IDBDatabase.prototype.transaction = transactionMethod;
+  }
+  const file = await reopened.readSnapshot(saved);
+  const restored = new Uint8Array(await file.arrayBuffer());
+  assert(file instanceof File && file.type === "application/octet-stream", "The stored snapshot is not a binary file.");
+  assert(restored.join(",") === "0,254,128,12", "The stored snapshot differs from the bytes passed to saveSnapshot.");
+  await expectFailure("not_found", () => readSnapshot(saved + 1));
+
+  // 2件目の書き込み要求が成功してから中止し、一覧と本体の巻き戻しを確かめる。
+  let abortedId;
+  IDBObjectStore.prototype.add = function (value, ...key) {
+    const request = addMethod.call(this, value, ...key);
+    if (this.name === "metadata") {
+      const transaction = this.transaction;
+      request.addEventListener("success", () => {
+        abortedId = request.result;
+        transaction.abort();
+      });
+    }
+    return request;
+  };
+  try {
+    await expectFailure("save_failed", () => saveSnapshot(bytes));
+  } finally {
+    IDBObjectStore.prototype.add = addMethod;
+  }
+  assert(Number.isInteger(abortedId), "The rollback probe never reached both successful write requests.");
+  await expectFailure("not_found", () => readSnapshot(abortedId));
+  assert((await listSnapshots()).map(({ id }) => id).join(",") === String(saved),
+    "Aborting the transaction changed the snapshot list.");
+
+  let quotaId;
+  IDBObjectStore.prototype.add = function (value, ...key) {
+    if (this.name === "metadata") {
+      quotaId = value.id;
+      throw new DOMException("Test quota limit.", "QuotaExceededError");
+    }
+    return addMethod.call(this, value, ...key);
+  };
+  try {
+    await expectFailure("quota", () => saveSnapshot(bytes));
+  } finally {
+    IDBObjectStore.prototype.add = addMethod;
+  }
+  assert(Number.isInteger(quotaId), "The quota probe never reached the metadata write.");
+  await expectFailure("not_found", () => readSnapshot(quotaId));
+  assert((await listSnapshots()).map(({ id }) => id).join(",") === String(saved),
+    "The quota error changed the snapshot list.");
+  const savedBytes = new Uint8Array(await (await readSnapshot(saved)).arrayBuffer());
+  assert(savedBytes.join(",") === restored.join(","), "A failed save changed the committed snapshot.");
+
+  const indexedDatabase = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
+  Object.defineProperty(globalThis, "indexedDB", { configurable: true, value: undefined });
+  try {
+    await expectFailure("unavailable", () => saveSnapshot(bytes));
+  } finally {
+    if (indexedDatabase) {
+      Object.defineProperty(globalThis, "indexedDB", indexedDatabase);
+    } else {
+      delete globalThis.indexedDB;
+    }
+  }
+}
+
+
+async function waitFor(predicate, message) {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
+    const result = predicate();
+    if (result) return result;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  throw new Error(message);
+}
+
+async function verifyBrowserControls() {
+  const { saveSnapshot, readSnapshot } = await import("./snapshot-store.js");
+  const response = await fetch("./cli-snapshot.bin");
+  assert(response.ok, "Could not read the native fixture.");
+  const native = new Uint8Array(await response.arrayBuffer());
+  const initialId = await saveSnapshot(native);
+
+  const frame = document.createElement("iframe");
+  frame.width = "800";
+  frame.height = "500";
+  frame.src = "./index.html";
+  document.body.append(frame);
+  try {
+    const menu = await waitFor(() => {
+      const list = frame.contentDocument?.querySelector("#saved-snapshots");
+      return list?.querySelector(`option[value="${initialId}"]`) ? list : false;
+    }, "A reopened GUI did not list the snapshot.");
+    const doc = frame.contentDocument;
+    const status = doc.querySelector("#project-status");
+    menu.value = String(initialId);
+    menu.dispatchEvent(new frame.contentWindow.Event("change"));
+    doc.querySelector("#restore-browser-snapshot").click();
+    await waitFor(() => status.textContent === "Snapshot restored.", "The GUI did not restore from IndexedDB.");
+
+    doc.querySelector("#save-browser-snapshot").click();
+    await waitFor(() => status.textContent === "Snapshot saved in this browser." &&
+      menu.value !== "" && menu.value !== String(initialId), "The GUI did not list the newly saved state.");
+    const restored = new Uint8Array(await (await readSnapshot(Number(menu.value))).arrayBuffer());
+    assert(restored.length === native.length && restored.every((byte, i) => byte === native[i]),
+      "The GUI did not save the state restored from the native fixture.");
+  } finally {
+    frame.remove();
+  }
+}
+
+let result = "PASS";
+try {
+  await verifyStorage();
+  await verifyBrowserControls();
+} catch (error) {
+  result = `FAIL: ${error instanceof Error ? error.stack : String(error)}`;
+}
+await fetch("/snapshot-result", { method: "POST", body: result });
+</script>
+</body>
+</html>
